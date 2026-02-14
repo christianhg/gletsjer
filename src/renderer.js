@@ -24,7 +24,8 @@ const BUFFER_HEIGHT = 180;
  * @returns {Renderer}
  */
 export function createRenderer(displayCanvas) {
-  const displayCtx = displayCanvas.getContext('2d');
+  // alpha: false tells the browser the canvas is fully opaque — skips compositing
+  const displayCtx = displayCanvas.getContext('2d', { alpha: false });
 
   // Off-screen buffer where all scene drawing happens
   const buffer = document.createElement('canvas');
@@ -84,20 +85,42 @@ export function createRenderer(displayCanvas) {
     bufferCtx.fillRect(0, 0, BUFFER_WIDTH, BUFFER_HEIGHT);
   }
 
+  // Pre-allocated ImageData for per-pixel manipulation — reused every frame
+  // to avoid GC pressure. Scene code writes into this, then calls putImageData().
+  const imageData = bufferCtx.createImageData(BUFFER_WIDTH, BUFFER_HEIGHT);
+  const pixels = imageData.data;
+
   /**
-   * Get direct pixel access to the buffer for per-pixel manipulation.
+   * Get the pre-allocated pixel buffer for direct manipulation.
+   * The returned ImageData is reused every frame — do NOT hold references
+   * across frames. Write your pixels, then call putImageData().
+   *
+   * If you need a fresh snapshot of what's currently on the buffer canvas
+   * (e.g. for glitch effects that read existing pixels), use snapshotImageData().
+   *
    * @returns {ImageData}
    */
   function getImageData() {
-    return bufferCtx.getImageData(0, 0, BUFFER_WIDTH, BUFFER_HEIGHT);
+    return imageData;
+  }
+
+  /**
+   * Snapshot the current buffer canvas contents into the pre-allocated ImageData.
+   * Use this when you need to read what's already been drawn (e.g. for post-effects).
+   * @returns {ImageData}
+   */
+  function snapshotImageData() {
+    const snap = bufferCtx.getImageData(0, 0, BUFFER_WIDTH, BUFFER_HEIGHT);
+    pixels.set(snap.data);
+    return imageData;
   }
 
   /**
    * Write pixel data back to the buffer.
-   * @param {ImageData} imageData
+   * @param {ImageData} [data] — defaults to the pre-allocated ImageData
    */
-  function putImageData(imageData) {
-    bufferCtx.putImageData(imageData, 0, 0);
+  function putImageData(data) {
+    bufferCtx.putImageData(data || imageData, 0, 0);
   }
 
   return {
@@ -113,13 +136,17 @@ export function createRenderer(displayCanvas) {
     displayCanvas,
     /** Display context reference */
     displayCtx,
+    /** Pre-allocated pixel array (Uint8ClampedArray, RGBA) */
+    pixels,
     /** Scale buffer to display canvas */
     flush,
     /** Clear the buffer */
     clear,
-    /** Get raw pixel data from buffer */
+    /** Get pre-allocated ImageData for per-pixel writes */
     getImageData,
-    /** Write raw pixel data to buffer */
+    /** Snapshot current buffer into ImageData (for reading existing pixels) */
+    snapshotImageData,
+    /** Write pixel data to buffer (defaults to pre-allocated ImageData) */
     putImageData,
     /** Recalculate display sizing */
     resize,
