@@ -50,7 +50,7 @@ export const devAPI = {
   forceEvent: (id) => {
     if (!rareEvents) return;
     // Reset edge-detection so re-forcing same event triggers callbacks
-    if (id === 'calving') calvingWasActive = false;
+    if (id === 'calving') { calvingWasActive = false; if (calving) calving.wasActive = false; }
     if (id === 'shootingStar') shootingStarWasActive = false;
     if (id === 'whiteout') { whiteoutWasActive = false; whiteoutTaperStarted = false; }
     if (id === 'deepGlitch') deepGlitchWasActive = false;
