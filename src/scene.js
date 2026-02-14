@@ -158,7 +158,7 @@ export function drawScene(renderer, state) {
   // 0b. Audio: update parameters from mood (dt for thermal inertia)
   if (isAudioActive()) updateAudio(mood, state.dt);
 
-  // 0b. Rare events
+  // 0c. Rare events
   updateRareEvents(rareEvents, state.dt, mood);
   handleShootingStar(width, height);
   handleWhiteout();
