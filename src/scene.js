@@ -66,6 +66,12 @@ let auroraResidue = 0.0;
 let auroraHighStart = 0;
 let fogResidueBoost = 0.0;
 
+// --- Fog front state ---
+let fogFrontX = -1;           // -1 = inactive, 0→1 = position across screen
+let fogFrontDir = 1;          // 1 = left-to-right, -1 = right-to-left
+let fogFrontIntensity = 0;    // 0→1, density behind the front
+let fogFrontLastEnd = 0;      // performance.now() timestamp, 3-min gap
+
 // Pre-allocated mood overlay (avoids mutating lightCycle singleton)
 const renderMood = {};
 const fogColorBuf = [0, 0, 0];
@@ -147,6 +153,22 @@ export function drawScene(renderer, state) {
   // Calving fog surge decay (τ = 60s)
   if (fogResidueBoost > 0.001) fogResidueBoost *= Math.exp(-state.dt / 60);
 
+  // Fog front: Poisson trigger (λ=1/480 ≈ 8min mean), movement, reset
+  if (fogFrontX < 0) {
+    const now = performance.now();
+    if (now - fogFrontLastEnd > 180000 && Math.random() < state.dt / 480) {
+      fogFrontDir = Math.random() < 0.5 ? 1 : -1;
+      fogFrontX = fogFrontDir > 0 ? -0.3 : 1.3;
+      fogFrontIntensity = 0.3 + Math.random() * 0.7;
+    }
+  } else {
+    fogFrontX += fogFrontDir * 0.004 * state.dt;
+    if (fogFrontX > 1.3 || fogFrontX < -0.3) {
+      fogFrontX = -1;
+      fogFrontLastEnd = performance.now();
+    }
+  }
+
   // Build renderMood: copy mood + augment fog fields (zero-alloc)
   Object.assign(renderMood, mood);
   renderMood.fogDensity = Math.min(mood.fogDensity + fogResidueBoost, 1.0);
@@ -154,9 +176,12 @@ export function drawScene(renderer, state) {
   fogColorBuf[1] = mood.fogColor[1] + auroraResidue * 8;
   fogColorBuf[2] = mood.fogColor[2];
   renderMood.fogColor = fogColorBuf;
+  renderMood.fogFrontX = fogFrontX;
+  renderMood.fogFrontDir = fogFrontDir;
+  renderMood.fogFrontIntensity = fogFrontIntensity;
 
   // 0b. Audio: update parameters from mood (dt for thermal inertia)
-  if (isAudioActive()) updateAudio(mood, state.dt);
+  if (isAudioActive()) updateAudio(mood, state.dt, fogFrontX);
 
   // 0c. Rare events
   updateRareEvents(rareEvents, state.dt, mood);
