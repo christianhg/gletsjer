@@ -194,6 +194,15 @@ function renderLayer(layer, data, width, height, time, layerIndex) {
   // Wraps around the heightmap for seamless scrolling
   const parallaxOffset = (drift * 8) | 0; // Scale drift to pixel units
 
+  // Texture noise drift — ice texture flows independently of terrain silhouette.
+  // Two sine waves at incommensurate frequencies create organic, never-repeating motion.
+  // Horizontal-dominant (3:1 ratio) — glaciers flow primarily sideways.
+  const texDriftX = drift * 3.0
+    + Math.sin(time * 0.00007) * 2.0
+    + Math.sin(time * 0.00019) * 0.8;
+  const texDriftY = drift * 1.0
+    + Math.sin(time * 0.00011) * 0.5;
+
   for (let x = 0; x < width; x++) {
     // Sample terrain at parallax-shifted position (wrapping)
     const srcX = ((x + parallaxOffset) % width + width) % width;
@@ -216,15 +225,17 @@ function renderLayer(layer, data, width, height, time, layerIndex) {
       const baseB = colorLight[2] + (colorDark[2] - colorLight[2]) * columnDepth;
 
       // --- Ice texture: fine noise for crystalline look ---
+      // Texture drifts with the ice flow — creates "ice is alive" shimmer
       const tex = simplex2(
-        x * 0.09 + layerIndex * 97,
-        y * 0.09 + drift
+        x * 0.09 + layerIndex * 97 + texDriftX,
+        y * 0.09 + texDriftY
       ) * 10;
 
       // --- Horizontal striations: compressed ice layers ---
+      // Striations drift slowly with the ice, but at half rate for visual depth
       const stria = simplex2(
-        x * 0.12 + layerIndex * 43,
-        y * 0.006
+        x * 0.12 + layerIndex * 43 + texDriftX * 0.5,
+        y * 0.006 + texDriftY * 0.3
       ) * 6 * columnDepth;
 
       // --- Crevasse darkening ---
