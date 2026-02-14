@@ -69,6 +69,7 @@ const BASE_DURATION = 3.0;
  * @property {number} rippleBoost - Current ripple multiplier (1.0 = no boost)
  * @property {boolean} wasActive - Edge detection for event activation
  * @property {Uint8ClampedArray} copyBuf - Pre-allocated buffer for block copy
+ * @property {Int8Array} jaggedOffset - Per-column height offset for jagged top edge
  * @property {number} width - Canvas width
  * @property {number} height - Canvas height
  */
@@ -93,6 +94,7 @@ export function createCalving(width, height) {
     rippleBoost: 1.0,
     wasActive: false,
     copyBuf: new Uint8ClampedArray(bufSize),
+    jaggedOffset: new Int8Array(BLOCK_W_MAX),
     width,
     height,
   };
@@ -160,11 +162,14 @@ export function applyCalving(calving, data, width, height, eventState) {
 
   if (progress < CRACK_END) {
     // --- Phase 1: Crack ---
-    // Bright cyan-white line at the top of the calving block
+    // Bright cyan-white line at the top of the calving block (jagged)
     const crackIntensity = (progress / CRACK_END) * CRACK_BRIGHTNESS;
-    const crackY = blockY;
 
-    for (let x = blockX; x < blockX + blockW && x < width; x++) {
+    for (let dx = 0; dx < blockW; dx++) {
+      const x = blockX + dx;
+      if (x >= width) break;
+      const crackY = blockY + calving.jaggedOffset[dx];
+      if (crackY < 0 || crackY >= height) continue;
       const i = (crackY * width + x) * 4;
       // Additive cyan-white crack
       data[i]     = clamp255(data[i] + crackIntensity * 0.6);
@@ -182,7 +187,7 @@ export function applyCalving(calving, data, width, height, eventState) {
     const disp = (eased * fallDist) | 0;
 
     if (disp > 0) {
-      displaceBlock(calving, data, width, height, disp, 1.0);
+      displaceBlock(calving, data, width, height, disp, 1.0, fallProgress);
     }
     return;
   }
@@ -193,7 +198,7 @@ export function applyCalving(calving, data, width, height, eventState) {
   const opacity = 1.0 - splashProgress;
 
   if (opacity > 0.01) {
-    displaceBlock(calving, data, width, height, fallDist, opacity);
+    displaceBlock(calving, data, width, height, fallDist, opacity, 1.0);
   }
 }
 
@@ -204,7 +209,7 @@ export function applyCalving(calving, data, width, height, eventState) {
  * @param {CalvingSystem} calving
  */
 function pickCalvingBlock(calving) {
-  const { width, height } = calving;
+  const { width, height, jaggedOffset } = calving;
 
   // Block dimensions
   calving.blockW = BLOCK_W_MIN + ((Math.random() * (BLOCK_W_MAX - BLOCK_W_MIN)) | 0);
@@ -219,10 +224,16 @@ function pickCalvingBlock(calving) {
 
   // Fall distance
   calving.fallDist = FALL_DIST_MIN + ((Math.random() * (FALL_DIST_MAX - FALL_DIST_MIN)) | 0);
+
+  // Jagged top edge: ±1-2px per column, seeded from blockX
+  for (let dx = 0; dx < calving.blockW; dx++) {
+    jaggedOffset[dx] = (((calving.blockX + dx) * 17 + dx * 31) & 3) - 1; // -1 to +2
+  }
 }
 
 /**
  * Displace a block of pixels downward and fill the gap.
+ * Uses jagged top edge profile and edge crumble during fall.
  *
  * @param {CalvingSystem} calving
  * @param {Uint8ClampedArray} data
@@ -230,21 +241,18 @@ function pickCalvingBlock(calving) {
  * @param {number} height
  * @param {number} disp - Displacement in pixels
  * @param {number} opacity - Block opacity (1.0 = full, fades during splash)
+ * @param {number} fallProgress - 0→1 fall progress (drives edge crumble)
  */
-function displaceBlock(calving, data, width, height, disp, opacity) {
-  const { blockX, blockY, blockW, blockH, copyBuf } = calving;
+function displaceBlock(calving, data, width, height, disp, opacity, fallProgress) {
+  const { blockX, blockY, blockW, blockH, copyBuf, jaggedOffset } = calving;
 
-  // Copy block pixels into pre-allocated buffer
+  // Copy block pixels into pre-allocated buffer (jagged source)
   let bufIdx = 0;
   for (let dy = 0; dy < blockH; dy++) {
-    const srcY = blockY + dy;
-    if (srcY < 0 || srcY >= height) {
-      bufIdx += blockW * 4;
-      continue;
-    }
     for (let dx = 0; dx < blockW; dx++) {
+      const srcY = blockY + jaggedOffset[dx] + dy;
       const x = blockX + dx;
-      if (x >= 0 && x < width) {
+      if (x >= 0 && x < width && srcY >= 0 && srcY < height) {
         const srcIdx = (srcY * width + x) * 4;
         copyBuf[bufIdx]     = data[srcIdx];
         copyBuf[bufIdx + 1] = data[srcIdx + 1];
@@ -255,17 +263,27 @@ function displaceBlock(calving, data, width, height, disp, opacity) {
     }
   }
 
-  // Write displaced block from buffer
+  // Write displaced block from buffer (with edge crumble)
   bufIdx = 0;
   for (let dy = 0; dy < blockH; dy++) {
-    const dstY = blockY + dy + disp;
-    if (dstY < 0 || dstY >= height) {
-      bufIdx += blockW * 4;
-      continue;
-    }
     for (let dx = 0; dx < blockW; dx++) {
+      const dstY = blockY + jaggedOffset[dx] + dy + disp;
       const x = blockX + dx;
-      if (x >= 0 && x < width) {
+      if (x >= 0 && x < width && dstY >= 0 && dstY < height) {
+        // Edge crumble: skip edge pixels probabilistically as fall progresses
+        if (fallProgress > 0) {
+          const isEdge = dx === 0 || dx === blockW - 1;
+          const isNearEdge = dx === 1 || dx === blockW - 2;
+          if (isEdge || isNearEdge) {
+            const threshold = isEdge ? fallProgress * 0.7 : fallProgress * 0.3;
+            const hash = ((blockX * 17 + dx * 31 + dy * 7) & 0xFF) / 255;
+            if (hash < threshold) {
+              bufIdx += 4;
+              continue;
+            }
+          }
+        }
+
         const dstIdx = (dstY * width + x) * 4;
         if (opacity >= 0.99) {
           data[dstIdx]     = copyBuf[bufIdx];
@@ -282,14 +300,13 @@ function displaceBlock(calving, data, width, height, disp, opacity) {
     }
   }
 
-  // Fill the gap with darkened pixels (exposed glacier interior)
+  // Fill the gap with darkened pixels (jagged top edge)
   const gapRows = Math.min(disp, blockH);
   for (let dy = 0; dy < gapRows; dy++) {
-    const gapY = blockY + dy;
-    if (gapY < 0 || gapY >= height) continue;
     for (let dx = 0; dx < blockW; dx++) {
+      const gapY = blockY + jaggedOffset[dx] + dy;
       const x = blockX + dx;
-      if (x < 0 || x >= width) continue;
+      if (x < 0 || x >= width || gapY < 0 || gapY >= height) continue;
       const i = (gapY * width + x) * 4;
       data[i]     = (data[i] * GAP_DARKEN) | 0;
       data[i + 1] = (data[i + 1] * (GAP_DARKEN + 0.1)) | 0;  // Slightly more green
