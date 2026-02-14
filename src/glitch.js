@@ -1,0 +1,204 @@
+/**
+ * Glitch Effects System
+ *
+ * Post-processing effects that create intermittent data-corruption aesthetics.
+ * Glitches are rare, brief events — punctuation, not noise.
+ *
+ * Architecture:
+ *   - GlitchController manages timing: cooldown (3-10s) → burst (100-500ms)
+ *   - During a burst, 1-3 effects are randomly combined
+ *   - Effects operate on the pixel buffer using a pre-allocated copy
+ *   - Intensity ramps up at burst start, cuts sharply at end
+ *
+ * Effects:
+ *   1. RGB channel split — horizontal offset of R and B channels
+ *   2. Scanlines — darken alternating rows with noise variation
+ *   3. Block displacement — shift random horizontal slices
+ */
+
+import { simplex2 } from './noise.js';
+
+/**
+ * @typedef {Object} GlitchController
+ * @property {boolean} active — currently in a glitch burst
+ * @property {number} timer — countdown to next state change (seconds)
+ * @property {number} intensity — current burst intensity (0-1)
+ * @property {number} burstDuration — total duration of current burst
+ * @property {number} burstElapsed — time elapsed in current burst
+ * @property {number} seed — per-burst seed for deterministic effect selection
+ * @property {Uint8ClampedArray} copy — pre-allocated pixel copy buffer
+ */
+
+/**
+ * Create the glitch controller. Call once at init.
+ *
+ * @param {number} width — buffer width
+ * @param {number} height — buffer height
+ * @returns {GlitchController}
+ */
+export function createGlitch(width, height) {
+  return {
+    active: false,
+    timer: 3 + Math.random() * 5, // Initial cooldown: 3-8s
+    intensity: 0,
+    burstDuration: 0,
+    burstElapsed: 0,
+    seed: 0,
+    // Pre-allocated copy buffer for effects that read source pixels
+    copy: new Uint8ClampedArray(width * height * 4),
+  };
+}
+
+/**
+ * Update the glitch controller timing.
+ *
+ * @param {GlitchController} glitch
+ * @param {number} dt — delta seconds
+ */
+export function updateGlitch(glitch, dt) {
+  glitch.timer -= dt;
+
+  if (glitch.active) {
+    glitch.burstElapsed += dt;
+
+    // Intensity envelope: quick ramp up (20% of duration), sustain, sharp cut
+    const progress = glitch.burstElapsed / glitch.burstDuration;
+    const rampUp = Math.min(1, progress / 0.2); // 0→1 over first 20%
+    glitch.intensity = rampUp * (0.3 + glitch.seed * 0.7);
+
+    if (glitch.timer <= 0) {
+      // Burst ended — enter cooldown
+      glitch.active = false;
+      glitch.intensity = 0;
+      glitch.timer = 3 + seededRandom(glitch.seed + 1) * 7; // 3-10s cooldown
+    }
+  } else {
+    if (glitch.timer <= 0) {
+      // Cooldown ended — start burst
+      glitch.active = true;
+      glitch.seed = Math.random();
+      glitch.burstDuration = 0.1 + Math.random() * 0.4; // 100-500ms
+      glitch.burstElapsed = 0;
+      glitch.timer = glitch.burstDuration;
+    }
+  }
+}
+
+/**
+ * Apply glitch effects to the pixel buffer (if active).
+ *
+ * @param {GlitchController} glitch
+ * @param {Uint8ClampedArray} data — RGBA pixel data
+ * @param {number} width
+ * @param {number} height
+ */
+export function applyGlitch(glitch, data, width, height) {
+  if (!glitch.active) return;
+
+  const { intensity, seed, copy } = glitch;
+
+  // Snapshot current pixels for effects that need to read source
+  copy.set(data);
+
+  // Deterministic effect selection based on burst seed
+  // Each burst gets a consistent combination of effects
+  if (seed < 0.7) rgbSplit(data, copy, width, height, intensity);
+  if (seed > 0.3 && seed < 0.8) scanlines(data, width, height, intensity);
+  if (seed > 0.5) blockDisplace(data, copy, width, height, intensity, seed);
+}
+
+// --- Effects ---
+
+/**
+ * RGB channel split — offset R and B channels horizontally.
+ * Creates chromatic aberration / data corruption look.
+ */
+function rgbSplit(data, copy, width, height, intensity) {
+  // Offset scales with intensity: 2-5px
+  const offset = ((2 + intensity * 3) | 0) || 1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dstIdx = (y * width + x) * 4;
+
+      // Red channel: shift right
+      const srcRX = Math.min(width - 1, Math.max(0, x + offset));
+      const srcRIdx = (y * width + srcRX) * 4;
+      data[dstIdx] = copy[srcRIdx]; // R from shifted position
+
+      // Green channel: stays in place (already correct)
+      // data[dstIdx + 1] = copy[dstIdx + 1];
+
+      // Blue channel: shift left
+      const srcBX = Math.min(width - 1, Math.max(0, x - offset));
+      const srcBIdx = (y * width + srcBX) * 4;
+      data[dstIdx + 2] = copy[srcBIdx + 2]; // B from shifted position
+    }
+  }
+}
+
+/**
+ * Scanlines — darken alternating rows.
+ * Simulates CRT display artifacts.
+ */
+function scanlines(data, width, height, intensity) {
+  // Darkness: 0.5-0.8 multiplier (stronger at higher intensity)
+  const baseDarkness = 0.8 - intensity * 0.3;
+
+  for (let y = 0; y < height; y += 2) {
+    // Vary darkness per line for organic feel
+    const lineDarkness = baseDarkness + simplex2(y * 0.5, intensity * 10) * 0.08;
+
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      data[idx]     = (data[idx]     * lineDarkness) | 0;
+      data[idx + 1] = (data[idx + 1] * lineDarkness) | 0;
+      data[idx + 2] = (data[idx + 2] * lineDarkness) | 0;
+    }
+  }
+}
+
+/**
+ * Block displacement — shift random horizontal slices.
+ * The classic "data corruption" glitch look.
+ */
+function blockDisplace(data, copy, width, height, intensity, seed) {
+  // Number of displaced slices: 2-8 based on intensity
+  const numSlices = (2 + intensity * 6) | 0;
+
+  for (let s = 0; s < numSlices; s++) {
+    // Deterministic slice positioning from seed
+    const sliceSeed = seededRandom(seed * 1000 + s * 7.3);
+    const sliceSeed2 = seededRandom(seed * 1000 + s * 13.7);
+    const sliceSeed3 = seededRandom(seed * 1000 + s * 23.1);
+
+    const sliceY = (sliceSeed * height) | 0;
+    const sliceH = (2 + sliceSeed2 * 8) | 0; // 2-10px tall
+    const offset = ((sliceSeed3 - 0.5) * width * intensity * 0.3) | 0;
+
+    if (offset === 0) continue;
+
+    for (let y = sliceY; y < Math.min(height, sliceY + sliceH); y++) {
+      for (let x = 0; x < width; x++) {
+        const srcX = Math.min(width - 1, Math.max(0, x + offset));
+        const dstIdx = (y * width + x) * 4;
+        const srcIdx = (y * width + srcX) * 4;
+
+        data[dstIdx]     = copy[srcIdx];
+        data[dstIdx + 1] = copy[srcIdx + 1];
+        data[dstIdx + 2] = copy[srcIdx + 2];
+      }
+    }
+  }
+}
+
+// --- Util ---
+
+/**
+ * Simple seeded pseudo-random. Returns 0-1.
+ * Deterministic for same input — gives consistent glitch patterns per burst.
+ */
+function seededRandom(n) {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}

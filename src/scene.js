@@ -1,13 +1,11 @@
 /**
  * Scene — glacier rendering entry point
  *
- * Orchestrates the full scene: glacier terrain (with parallax),
- * water reflection, and snow particles.
- *
- * Render order:
- *   1. Glacier (sky + 5 ice layers + snow caps)
- *   2. Water reflection (reads glacier pixels, writes water zone)
- *   3. Snow particles (additive blend on top of everything)
+ * Orchestrates the full scene render pipeline:
+ *   1. Glacier (sky + 5 ice layers with parallax + snow caps)
+ *   2. Water reflection (mirrored, tinted, ripple distortion)
+ *   3. Snow particles (additive blend)
+ *   4. Glitch effects (intermittent post-processing)
  *
  * Uses the renderer's pre-allocated ImageData — zero allocations per frame.
  */
@@ -15,12 +13,16 @@
 import { generateGlacier, renderGlacier } from './glacier.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow } from './snow.js';
+import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
 
 /** @type {import('./glacier.js').Glacier | null} */
 let glacier = null;
 
 /** @type {import('./snow.js').SnowSystem | null} */
 let snow = null;
+
+/** @type {import('./glitch.js').GlitchController | null} */
+let glitch = null;
 
 /**
  * Draw the scene into the renderer's off-screen buffer.
@@ -31,10 +33,11 @@ let snow = null;
 export function drawScene(renderer, state) {
   const { width, height } = renderer;
 
-  // Lazy init — generate terrain and particle systems once
+  // Lazy init — generate terrain and systems once
   if (!glacier) {
     glacier = generateGlacier(width, height);
     snow = createSnow(width, height);
+    glitch = createGlitch(width, height);
   }
 
   // Get pre-allocated ImageData and render directly into its pixel buffer
@@ -49,6 +52,10 @@ export function drawScene(renderer, state) {
 
   // 3. Snow: particles on top of everything (additive blend)
   updateAndRenderSnow(snow, data, state.time, state.dt);
+
+  // 4. Glitch: intermittent post-processing effects
+  updateGlitch(glitch, state.dt);
+  applyGlitch(glitch, data, width, height);
 
   // Write to buffer canvas (no arg = uses pre-allocated ImageData)
   renderer.putImageData();
