@@ -15,7 +15,7 @@
  *   8. Vignette
  */
 
-import { createLightCycle, updateLightCycle, getMood } from './lightCycle.js';
+import { createLightCycle, updateLightCycle, getMood, dateHash } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
@@ -132,6 +132,8 @@ export function drawScene(renderer, state) {
       canActivate: () => getAudioElapsed() > 600 && isAudioActive(),
       duration: () => 3 + Math.random() * 2,
     });
+
+    seedStartingState(width, height);
   }
 
   // 0. Mood (dev panel: freeze stops phase, speedMultiplier scales dt)
@@ -304,6 +306,52 @@ function handleDeepGlitch() {
     glitch.timer = 3 + Math.random() * 5;
   }
   deepGlitchWasActive = s.active;
+}
+
+/**
+ * Seed starting state — the glacier has history when you arrive.
+ * Uses dateHash(10-50) for deterministic per-day seeding.
+ * Called once at init, after all subsystems are created.
+ */
+function seedStartingState(width, height) {
+  // 1. Calving scars: 2-3 pre-existing, partially decayed
+  const scarCount = 2 + (dateHash(10) > 0.5 ? 1 : 0);
+  for (let i = 0; i < scarCount; i++) {
+    const base = 11 + i * 5;
+    const blockW = 8 + (dateHash(base) * 8) | 0;       // 8-16px
+    const blockH = 6 + (dateHash(base + 1) * 6) | 0;   // 6-12px
+    const margin = (width * 0.2) | 0;
+    const blockX = margin + (dateHash(base + 2) * (width - 2 * margin - blockW)) | 0;
+    const blockY = ((height * 0.72) | 0) + (dateHash(base + 3) * 10) | 0;
+    const jagged = calving.scarJagged[i];
+    for (let j = 0; j < blockW; j++) jagged[j] = ((dateHash(50 + i * 16 + j) - 0.5) * 4) | 0;
+    const age = 30 + dateHash(base + 4) * 210; // 30-240s ago
+    calving.scars[i] = { blockX, blockY, blockW, blockH, jaggedOffset: jagged, birth: performance.now() - age * 1000 };
+  }
+  calving.scarIdx = scarCount % 4;
+
+  // 2. Fog front: ~30% chance of mid-crossing
+  if (dateHash(30) < 0.3) {
+    fogFrontDir = dateHash(31) < 0.5 ? 1 : -1;
+    fogFrontX = 0.2 + dateHash(32) * 0.6;  // 0.2-0.8, already mid-crossing
+    fogFrontIntensity = 0.3 + dateHash(33) * 0.7;
+  }
+
+  // 3. Aurora afterglow: only if phase is post-aurora-peak (0.6-0.9)
+  if (lightCycle.phase > 0.6 && lightCycle.phase < 0.9) {
+    auroraResidue = dateHash(40) * 0.6;
+  }
+
+  // 4. Snow memory: always seeded, 0-0.4 range
+  snow.residue = dateHash(41) * 0.4;
+
+  // 5. Calving fog surge: if freshest scar < 60s old
+  let freshestAge = Infinity;
+  for (let i = 0; i < scarCount; i++) {
+    const scar = calving.scars[i];
+    if (scar) freshestAge = Math.min(freshestAge, (performance.now() - scar.birth) / 1000);
+  }
+  if (freshestAge < 60) fogResidueBoost = 0.15 * Math.exp(-freshestAge / 60);
 }
 
 /** Single-frame color inversion. The fourth-wall crack. ~0.1ms. */

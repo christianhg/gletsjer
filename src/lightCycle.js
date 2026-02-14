@@ -186,7 +186,7 @@ const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
  * Date hash: deterministic [0,1) from calendar date + field index.
  * Same date + index always produces the same value. Different days diverge.
  */
-function dateHash(fieldIndex) {
+export function dateHash(fieldIndex) {
   const d = new Date();
   const str = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
   let h = fieldIndex * 2654435761; // Knuth multiplicative hash seed per field
