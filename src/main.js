@@ -7,6 +7,7 @@
 
 import { createRenderer } from './renderer.js';
 import { drawScene } from './scene.js';
+import { toggleAudio, suspendAudio, resumeAudio } from './audio.js';
 
 // --- Bootstrap ---
 
@@ -35,6 +36,19 @@ window.addEventListener('resize', () => {
 
 document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// --- Audio: opt-in via touch/click, no UI ---
+// Debounce: mobile fires touchstart then click — guard with timestamp
+
+let lastAudioToggle = 0;
+function handleAudioToggle() {
+  const now = performance.now();
+  if (now - lastAudioToggle < 400) return;
+  lastAudioToggle = now;
+  toggleAudio(prefersReducedMotion);
+}
+canvas.addEventListener('click', handleAudioToggle);
+canvas.addEventListener('touchstart', handleAudioToggle);
 
 // --- Animation loop ---
 
@@ -98,9 +112,11 @@ document.addEventListener('visibilitychange', () => {
       cancelAnimationFrame(animFrameId);
       animFrameId = null;
     }
+    suspendAudio();
   } else {
     // Reset timestamp to avoid huge dt spike on resume
     lastTimestamp = 0;
+    resumeAudio();
     if (animFrameId === null) {
       animFrameId = requestAnimationFrame(loop);
     }
