@@ -26,6 +26,8 @@ import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
+import { updateAudio, isAudioActive, triggerCalvingSound, triggerShootingStarSound,
+         triggerWhiteoutSound, taperWhiteoutSound, triggerDeepGlitchSound } from './audio.js';
 
 let lightCycle = null;
 let glacier = null;
@@ -42,6 +44,7 @@ let shootingStarWasActive = false;
 let whiteoutWasActive = false;
 let whiteoutTaperStarted = false;
 let deepGlitchWasActive = false;
+let calvingWasActive = false;
 
 /**
  * @param {import('./renderer.js').Renderer} renderer
@@ -91,6 +94,9 @@ export function drawScene(renderer, state) {
   updateLightCycle(lightCycle, state.dt);
   const mood = getMood(lightCycle);
 
+  // 0a. Audio: update parameters from mood
+  if (isAudioActive()) updateAudio(mood);
+
   // 0b. Rare events
   updateRareEvents(rareEvents, state.dt, mood);
   handleShootingStar(width, height);
@@ -98,6 +104,8 @@ export function drawScene(renderer, state) {
   handleDeepGlitch();
 
   const calvingEvent = getEventState(rareEvents, 'calving');
+  if (calvingEvent.active && !calvingWasActive && isAudioActive()) triggerCalvingSound();
+  calvingWasActive = calvingEvent.active;
   updateCalving(calving, calvingEvent);
 
   // Render
@@ -145,7 +153,10 @@ export function drawScene(renderer, state) {
 
 function handleShootingStar(width, height) {
   const s = getEventState(rareEvents, 'shootingStar');
-  if (s.active && !shootingStarWasActive) initShootingStar(width, height);
+  if (s.active && !shootingStarWasActive) {
+    initShootingStar(width, height);
+    if (isAudioActive()) triggerShootingStarSound();
+  }
   shootingStarWasActive = s.active;
 }
 
@@ -154,10 +165,12 @@ function handleWhiteout() {
   if (s.active && !whiteoutWasActive) {
     activateWhiteout(snow);
     whiteoutTaperStarted = false;
+    if (isAudioActive()) triggerWhiteoutSound();
   }
   if (s.active && !whiteoutTaperStarted && s.progress >= 0.8) {
     beginWhiteoutTaper(snow);
     whiteoutTaperStarted = true;
+    if (isAudioActive()) taperWhiteoutSound();
   }
   if (!s.active && whiteoutWasActive) {
     if (!snow.tapering) beginWhiteoutTaper(snow);
@@ -174,6 +187,7 @@ function handleDeepGlitch() {
     glitch.burstDuration = s.duration;
     glitch.burstElapsed = 0;
     glitch.timer = s.duration;
+    if (isAudioActive()) triggerDeepGlitchSound();
   }
   if (s.active) {
     // 2-3× normal peak — unmistakably different from a normal burst
