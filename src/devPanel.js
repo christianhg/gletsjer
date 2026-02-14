@@ -33,8 +33,9 @@ let visible = false;
 const driftDragging = { speedDrift: false, skyWarmth: false, fogMod: false, auroraMod: false, brightMod: false };
 
 export function initDevPanel() {
-  // Konami listener
+  // Keyboard listener: D key toggle + Konami code
   document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyD') { togglePanel(); return; }
     keyBuf.push(e.code);
     if (keyBuf.length > 10) keyBuf.shift();
     if (keyBuf.length === 10 && keyBuf.every((k, i) => k === KONAMI[i])) {
