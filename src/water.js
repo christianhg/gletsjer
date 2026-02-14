@@ -98,10 +98,11 @@ export function renderWater(data, width, height, time, mood) {
       let waterG = (g * darken * tintG + floorG) | 0;
       let waterB = (b * darken * tintB + floorB) | 0;
 
-      // Surface highlight
+      // Surface highlight — dims with mood so night waterline isn't a bright line
       if (wy < HIGHLIGHT_ROWS) {
         const hlStrength = (HIGHLIGHT_ROWS - wy) / HIGHLIGHT_ROWS;
-        const hl = (hlStrength * 35) | 0;
+        const ambientHL = mood ? mood.ambientBrightness : 1.0;
+        const hl = (hlStrength * 35 * ambientHL) | 0;
         waterR = (waterR + hl) | 0;
         waterG = (waterG + hl + 8) | 0;
         waterB = (waterB + hl + 18) | 0;

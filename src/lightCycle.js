@@ -124,7 +124,7 @@ const STOPS = [
     skyBottom:     [62, 45, 58],
     shadowTint:    [4, 0, 6],
     highlightTint: [10, 4, 8],
-    fogDensity:    0.75,
+    fogDensity:    0.85,
     fogColor:      [45, 35, 48],
     auroraVis:     0.0,
     starVis:       0.15,
