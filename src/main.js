@@ -8,6 +8,7 @@
 import { createRenderer } from './renderer.js';
 import { drawScene } from './scene.js';
 import { toggleAudio, suspendAudio, resumeAudio } from './audio.js';
+import { initDevPanel } from './devPanel.js';
 
 // --- Bootstrap ---
 
@@ -122,6 +123,9 @@ document.addEventListener('visibilitychange', () => {
     }
   }
 });
+
+// Dev panel (hidden by default — Konami code or 5-tap to reveal)
+initDevPanel();
 
 // Kick off
 animFrameId = requestAnimationFrame(loop);
