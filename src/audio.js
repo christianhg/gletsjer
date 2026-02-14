@@ -100,11 +100,19 @@ export function triggerCalvingSound() {
   const o = osc('sine', 60); o.frequency.exponentialRampToValueAtTime(25, t + 0.5);
   const tg = gain(v * 0.6); tg.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
   o.connect(tg); tg.connect(eventBus); o.start(t); o.stop(t + 0.8);
+  // Water wash: low-passed noise tail, arrives 200ms after crack (splash phase)
+  const w = noiseSrc(); const wf = bpf('lowpass', 150, 1.5);
+  const wg = gain(0); wg.gain.setValueAtTime(0, t + 0.2);
+  wg.gain.linearRampToValueAtTime(v * 0.3, t + 0.5);
+  wg.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+  w.connect(wf); wf.connect(wg); wg.connect(eventBus);
+  w.start(t + 0.2); w.stop(t + 2.0);
 }
 
 export function triggerShootingStarSound() {
   if (!isAudioActive()) return;
   const t = ctx.currentTime, v = reduced ? 0.03 : 0.06;
+  // Downward sweep: Doppler passing — something arriving and passing through awareness
   const o = osc('sine', 4000); o.frequency.exponentialRampToValueAtTime(1200, t + 0.4);
   const g = gain(0); g.gain.linearRampToValueAtTime(v, t + 0.05);
   g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
