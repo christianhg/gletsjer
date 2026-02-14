@@ -2,12 +2,18 @@
  * Scene — glacier rendering entry point
  *
  * Orchestrates the full scene: glacier terrain (with parallax),
- * snow particles, and future effects.
+ * water reflection, and snow particles.
+ *
+ * Render order:
+ *   1. Glacier (sky + 5 ice layers + snow caps)
+ *   2. Water reflection (reads glacier pixels, writes water zone)
+ *   3. Snow particles (additive blend on top of everything)
  *
  * Uses the renderer's pre-allocated ImageData — zero allocations per frame.
  */
 
 import { generateGlacier, renderGlacier } from './glacier.js';
+import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow } from './snow.js';
 
 /** @type {import('./glacier.js').Glacier | null} */
@@ -33,12 +39,16 @@ export function drawScene(renderer, state) {
 
   // Get pre-allocated ImageData and render directly into its pixel buffer
   const imageData = renderer.getImageData();
+  const data = imageData.data;
 
-  // Render glacier (includes sky, layers with parallax, snow caps)
-  renderGlacier(glacier, imageData.data, state.time);
+  // 1. Glacier: sky, ice layers with parallax, snow caps
+  renderGlacier(glacier, data, state.time);
 
-  // Render snow particles on top of everything
-  updateAndRenderSnow(snow, imageData.data, state.time, state.dt);
+  // 2. Water: mirrored reflection with ripple distortion
+  renderWater(data, width, height, state.time);
+
+  // 3. Snow: particles on top of everything (additive blend)
+  updateAndRenderSnow(snow, data, state.time, state.dt);
 
   // Write to buffer canvas (no arg = uses pre-allocated ImageData)
   renderer.putImageData();
