@@ -2,7 +2,7 @@
  * gletsjer — main entry point
  *
  * Sets up the rendering pipeline and animation loop.
- * Scene modules plug in via the render callback pattern.
+ * Handles lifecycle: resize, visibility (battery), reduced motion.
  */
 
 import { createRenderer } from './renderer.js';
@@ -15,11 +15,26 @@ if (!canvas) throw new Error('Canvas element #canvas not found');
 
 const renderer = createRenderer(canvas);
 
+// --- Accessibility: reduced motion ---
+
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * Animation speed multiplier.
+ * 1.0 = normal, 0.3 = reduced motion (slow, calm, no glitch/snow).
+ */
+const SPEED = prefersReducedMotion ? 0.3 : 1.0;
+
 // --- Resize handling ---
 
 window.addEventListener('resize', () => {
   renderer.resize();
 });
+
+// --- Prevent mobile touch interference ---
+
+document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // --- Animation loop ---
 
@@ -31,6 +46,7 @@ window.addEventListener('resize', () => {
  * @property {number} time — elapsed time in seconds (monotonic)
  * @property {number} dt — delta time since last frame in seconds
  * @property {number} frame — frame counter
+ * @property {boolean} reducedMotion — user prefers reduced motion
  */
 
 /** @type {FrameState} */
@@ -38,15 +54,19 @@ const state = {
   time: 0,
   dt: 0,
   frame: 0,
+  reducedMotion: prefersReducedMotion,
 };
 
 let lastTimestamp = 0;
+let animFrameId = null;
 
 /**
  * Main animation loop. Runs every frame via requestAnimationFrame.
  * @param {DOMHighResTimeStamp} timestamp
  */
 function loop(timestamp) {
+  animFrameId = requestAnimationFrame(loop);
+
   // Convert to seconds
   const timeSec = timestamp / 1000;
 
@@ -54,8 +74,9 @@ function loop(timestamp) {
     lastTimestamp = timeSec;
   }
 
-  state.dt = Math.min(timeSec - lastTimestamp, 0.1); // Cap dt to avoid spiral of death
-  state.time = timeSec;
+  const rawDt = Math.min(timeSec - lastTimestamp, 0.1); // Cap dt to avoid spiral of death
+  state.dt = rawDt * SPEED;
+  state.time += state.dt;
   state.frame++;
   lastTimestamp = timeSec;
 
@@ -67,9 +88,24 @@ function loop(timestamp) {
 
   // Scale buffer to display
   renderer.flush();
-
-  requestAnimationFrame(loop);
 }
 
+// --- Visibility API: pause when tab is hidden (battery) ---
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (animFrameId !== null) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+    }
+  } else {
+    // Reset timestamp to avoid huge dt spike on resume
+    lastTimestamp = 0;
+    if (animFrameId === null) {
+      animFrameId = requestAnimationFrame(loop);
+    }
+  }
+});
+
 // Kick off
-requestAnimationFrame(loop);
+animFrameId = requestAnimationFrame(loop);

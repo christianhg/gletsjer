@@ -12,6 +12,8 @@ body {
   height: 100%;
   overflow: hidden;
   background: #0a0a1a;
+  /* Prevent pull-to-refresh and scroll bounce on mobile */
+  overscroll-behavior: none;
 }
 
 canvas {
@@ -20,4 +22,8 @@ canvas {
   height: 100%;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  /* Prevent touch actions that interfere with full-screen experience */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
