@@ -1,107 +1,200 @@
 /**
  * Scene — glacier rendering entry point
  *
- * Orchestrates the full scene render pipeline:
- *   0. Update light cycle → derive mood
- *   1. Sky (mood-dependent gradient)
- *   2. Aurora borealis (renders into sky, outputs per-column light)
- *   3. Stars (night sky point lights — terrain occludes them)
- *   4. Glacier layers (terrain occludes aurora + stars + fog + aurora ice lighting)
- *   5. Water reflection (mood-tinted)
- *   6. Snow particles (mood-dimmed)
- *   7. Glitch effects (mood-character)
- *   8. Vignette (edge darkening)
- *
- * The mood object flows from lightCycle.js to every renderer.
- * One source of truth, one update per frame.
- *
- * Key ordering: aurora renders AFTER sky but BEFORE glacier layers.
- * Glacier terrain paints over aurora pixels → free depth occlusion.
+ * Pipeline:
+ *   0. Update light cycle → mood
+ *   0b. Update rare event scheduler
+ *   1. Sky (mood gradient)
+ *   2. Aurora (sky zone + per-column ice light)
+ *   3. Stars + shooting star (terrain occludes)
+ *   4. Glacier layers (fog + aurora ice lighting + snow caps)
+ *   4b. Ice calving (localized block displacement)
+ *   5. Water (mood-tinted, calving ripple boost)
+ *   6. Snow (whiteout-capable, blue-shifted)
+ *   7. Glitch (deep glitch override + color inversion)
+ *   8. Vignette
  */
 
 import { createLightCycle, updateLightCycle, getMood } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
+import { createRareEvents, registerEvent, updateRareEvents, getEventState } from './rareEvents.js';
+import { initShootingStar, renderShootingStar } from './shootingStar.js';
+import { createCalving, updateCalving, applyCalving, getCalvingDuration } from './calving.js';
 import { renderWater } from './water.js';
-import { createSnow, updateAndRenderSnow } from './snow.js';
+import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
 
-/** @type {import('./lightCycle.js').LightCycle | null} */
 let lightCycle = null;
-
-/** @type {import('./glacier.js').Glacier | null} */
 let glacier = null;
-
-/** @type {import('./aurora.js').Aurora | null} */
 let aurora = null;
-
-/** @type {import('./stars.js').StarField | null} */
 let stars = null;
-
-/** @type {import('./snow.js').SnowSystem | null} */
+let rareEvents = null;
+let calving = null;
 let snow = null;
-
-/** @type {import('./glitch.js').GlitchController | null} */
 let glitch = null;
-
-/** @type {import('./vignette.js').VignetteMap | null} */
 let vignette = null;
 
+// Rare event edge-detection flags
+let shootingStarWasActive = false;
+let whiteoutWasActive = false;
+let whiteoutTaperStarted = false;
+let deepGlitchWasActive = false;
+
 /**
- * Draw the scene into the renderer's off-screen buffer.
- *
  * @param {import('./renderer.js').Renderer} renderer
  * @param {import('./main.js').FrameState} state
  */
 export function drawScene(renderer, state) {
   const { width, height } = renderer;
 
-  // Lazy init — generate terrain and systems once
   if (!glacier) {
     lightCycle = createLightCycle();
     glacier = generateGlacier(width, height);
     aurora = createAurora(width, height);
     stars = createStars(width, height);
+    calving = createCalving(width, height);
     snow = createSnow(width, height);
     glitch = createGlitch(width, height);
     vignette = createVignette(width, height);
+
+    rareEvents = createRareEvents();
+    registerEvent(rareEvents, {
+      id: 'shootingStar',
+      meanInterval: 45 * 60,
+      canActivate: (mood) => mood.starVisibility > 0.5,
+      duration: () => 0.4 + Math.random() * 0.2,
+    });
+    registerEvent(rareEvents, {
+      id: 'whiteout',
+      meanInterval: 60 * 60,
+      canActivate: () => true,
+      duration: () => 10 + Math.random() * 5,
+    });
+    registerEvent(rareEvents, {
+      id: 'deepGlitch',
+      meanInterval: 90 * 60,
+      canActivate: () => true,
+      duration: () => 1 + Math.random() * 1,
+    });
+    registerEvent(rareEvents, {
+      id: 'calving',
+      meanInterval: 20 * 60,
+      canActivate: () => true,
+      duration: getCalvingDuration,
+    });
   }
 
-  // 0. Update light cycle and derive mood (single source of truth)
+  // 0. Mood
   updateLightCycle(lightCycle, state.dt);
   const mood = getMood(lightCycle);
 
-  // Get pre-allocated ImageData
+  // 0b. Rare events
+  updateRareEvents(rareEvents, state.dt, mood);
+  handleShootingStar(width, height);
+  handleWhiteout();
+  handleDeepGlitch();
+
+  const calvingEvent = getEventState(rareEvents, 'calving');
+  updateCalving(calving, calvingEvent);
+
+  // Render
   const imageData = renderer.getImageData();
   const data = imageData.data;
 
-  // 1. Sky: mood-driven gradient
+  // 1. Sky
   renderGlacierSky(glacier, data, state.time, mood);
 
-  // 2. Aurora: renders into sky zone, computes per-column light for ice tinting
+  // 2. Aurora
   renderAurora(aurora, data, width, height, state.time, mood);
 
-  // 3. Stars: night sky point lights (terrain will occlude them in step 4)
+  // 3. Stars + shooting star
   renderStars(stars, data, width, state.time, mood);
+  renderShootingStar(data, width, height, getEventState(rareEvents, 'shootingStar'));
 
-  // 4. Glacier layers: terrain occludes aurora + stars + fog + aurora ice lighting + snow caps
+  // 4. Glacier terrain
   renderGlacierTerrain(glacier, data, state.time, mood, aurora);
 
-  // 5. Water: mirrored reflection with mood-tinted colors
-  renderWater(data, width, height, state.time, mood);
+  // 4b. Ice calving
+  applyCalving(calving, data, width, height, calvingEvent);
 
-  // 6. Snow: particles with mood-dimmed brightness
+  // 5. Water (with calving ripple boost)
+  renderWater(data, width, height, state.time, mood, calving.rippleBoost);
+
+  // 6. Snow (whiteout-capable, blue-shifted)
   updateAndRenderSnow(snow, data, state.time, state.dt, mood);
 
-  // 7. Glitch: intermittent post-processing with mood-shifted character
+  // 7. Glitch + deep glitch inversion
   updateGlitch(glitch, state.dt);
   applyGlitch(glitch, data, width, height, mood);
 
-  // 8. Vignette: darken edges (final compositing step)
+  const dgState = getEventState(rareEvents, 'deepGlitch');
+  if (dgState.active && dgState.progress > 0.1 && dgState.progress < 0.15) {
+    invertFrame(data, width, height);
+  }
+
+  // 8. Vignette
   applyVignette(vignette, data);
 
-  // Write to buffer canvas
   renderer.putImageData();
+}
+
+// --- Rare event handlers ---
+
+function handleShootingStar(width, height) {
+  const s = getEventState(rareEvents, 'shootingStar');
+  if (s.active && !shootingStarWasActive) initShootingStar(width, height);
+  shootingStarWasActive = s.active;
+}
+
+function handleWhiteout() {
+  const s = getEventState(rareEvents, 'whiteout');
+  if (s.active && !whiteoutWasActive) {
+    activateWhiteout(snow);
+    whiteoutTaperStarted = false;
+  }
+  if (s.active && !whiteoutTaperStarted && s.progress >= 0.8) {
+    beginWhiteoutTaper(snow);
+    whiteoutTaperStarted = true;
+  }
+  if (!s.active && whiteoutWasActive) {
+    if (!snow.tapering) beginWhiteoutTaper(snow);
+    whiteoutTaperStarted = false;
+  }
+  whiteoutWasActive = s.active;
+}
+
+function handleDeepGlitch() {
+  const s = getEventState(rareEvents, 'deepGlitch');
+  if (s.active && !deepGlitchWasActive) {
+    glitch.active = true;
+    glitch.seed = Math.random();
+    glitch.burstDuration = s.duration;
+    glitch.burstElapsed = 0;
+    glitch.timer = s.duration;
+  }
+  if (s.active) {
+    // 2-3× normal peak — unmistakably different from a normal burst
+    glitch.intensity = 1.5 + s.intensity * 1.5;
+    glitch.burstElapsed = s.elapsed;
+    glitch.timer = s.duration - s.elapsed;
+    glitch.active = true;
+  } else if (deepGlitchWasActive) {
+    glitch.active = false;
+    glitch.intensity = 0;
+    glitch.timer = 3 + Math.random() * 5;
+  }
+  deepGlitchWasActive = s.active;
+}
+
+/** Single-frame color inversion. The fourth-wall crack. ~0.1ms. */
+function invertFrame(data, width, height) {
+  const len = width * height * 4;
+  for (let i = 0; i < len; i += 4) {
+    data[i]     = 255 - data[i];
+    data[i + 1] = 255 - data[i + 1];
+    data[i + 2] = 255 - data[i + 2];
+  }
 }
