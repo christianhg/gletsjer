@@ -21,7 +21,7 @@ import { createAurora, renderAurora } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
 import { createRareEvents, registerEvent, updateRareEvents, getEventState, forceEvent } from './rareEvents.js';
 import { initShootingStar, renderShootingStar } from './shootingStar.js';
-import { createCalving, updateCalving, applyCalving, getCalvingDuration } from './calving.js';
+import { createCalving, updateCalving, applyCalving, applyScars, getCalvingDuration } from './calving.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch, applyDataBleed } from './glitch.js';
@@ -60,6 +60,15 @@ export const devAPI = {
   frozen: false,
   speedMultiplier: 1,
 };
+
+// --- Residue state ---
+let auroraResidue = 0.0;
+let auroraHighStart = 0;
+let fogResidueBoost = 0.0;
+
+// Pre-allocated mood overlay (avoids mutating lightCycle singleton)
+const renderMood = {};
+const fogColorBuf = [0, 0, 0];
 
 // Rare event edge-detection flags
 let shootingStarWasActive = false;
@@ -124,10 +133,32 @@ export function drawScene(renderer, state) {
   updateLightCycle(lightCycle, cycleDt);
   const mood = getMood(lightCycle);
 
-  // 0a. Audio: update parameters from mood (dt for thermal inertia)
+  // 0a. Residue: aurora afterglow + calving fog surge
+  // Aurora afterglow: accumulate when aurora is bright for 60+ seconds
+  if (mood.auroraVisibility > 0.7) {
+    if (auroraHighStart === 0) auroraHighStart = state.time;
+    if (state.time - auroraHighStart > 60) {
+      auroraResidue = Math.min(auroraResidue + state.dt * 0.01, 1.0);
+    }
+  } else {
+    auroraHighStart = 0;
+    if (auroraResidue > 0.001) auroraResidue *= Math.exp(-state.dt / 90); // τ = 90s
+  }
+  // Calving fog surge decay (τ = 60s)
+  if (fogResidueBoost > 0.001) fogResidueBoost *= Math.exp(-state.dt / 60);
+
+  // Build renderMood: copy mood + augment fog fields (zero-alloc)
+  Object.assign(renderMood, mood);
+  renderMood.fogDensity = Math.min(mood.fogDensity + fogResidueBoost, 1.0);
+  fogColorBuf[0] = mood.fogColor[0];
+  fogColorBuf[1] = mood.fogColor[1] + auroraResidue * 8;
+  fogColorBuf[2] = mood.fogColor[2];
+  renderMood.fogColor = fogColorBuf;
+
+  // 0b. Audio: update parameters from mood (dt for thermal inertia)
   if (isAudioActive()) updateAudio(mood, state.dt);
 
-  // 0b. Rare events
+  // 0c. Rare events
   updateRareEvents(rareEvents, state.dt, mood);
   handleShootingStar(width, height);
   handleWhiteout();
@@ -135,6 +166,7 @@ export function drawScene(renderer, state) {
 
   const calvingEvent = getEventState(rareEvents, 'calving');
   if (calvingEvent.active && !calvingWasActive && isAudioActive()) triggerCalvingSound();
+  if (!calvingEvent.active && calvingWasActive) fogResidueBoost = 0.15; // Calving fog surge
   calvingWasActive = calvingEvent.active;
   updateCalving(calving, calvingEvent);
 
@@ -149,30 +181,31 @@ export function drawScene(renderer, state) {
   const data = imageData.data;
 
   // 1. Sky
-  renderGlacierSky(glacier, data, state.time, mood);
+  renderGlacierSky(glacier, data, state.time, renderMood);
 
   // 2. Aurora
-  renderAurora(aurora, data, width, height, state.time, mood);
+  renderAurora(aurora, data, width, height, state.time, renderMood);
 
   // 3. Stars + shooting star
-  renderStars(stars, data, width, state.time, mood);
+  renderStars(stars, data, width, state.time, renderMood);
   renderShootingStar(data, width, height, getEventState(rareEvents, 'shootingStar'));
 
-  // 4. Glacier terrain
-  renderGlacierTerrain(glacier, data, state.time, mood, aurora);
+  // 4. Glacier terrain (reads augmented fogDensity + fogColor)
+  renderGlacierTerrain(glacier, data, state.time, renderMood, aurora);
 
-  // 4b. Ice calving
+  // 4b. Ice calving + scars
   applyCalving(calving, data, width, height, calvingEvent);
+  applyScars(calving, data, width, height);
 
   // 5. Water (with calving ripple boost)
-  renderWater(data, width, height, state.time, mood, calving.rippleBoost);
+  renderWater(data, width, height, state.time, renderMood, calving.rippleBoost);
 
   // 6. Snow (whiteout-capable, blue-shifted)
-  updateAndRenderSnow(snow, data, state.time, state.dt, mood);
+  updateAndRenderSnow(snow, data, state.time, state.dt, renderMood);
 
   // 7. Glitch + deep glitch inversion
   updateGlitch(glitch, state.dt);
-  applyGlitch(glitch, data, width, height, mood);
+  applyGlitch(glitch, data, width, height, renderMood);
 
   const dgState = getEventState(rareEvents, 'deepGlitch');
   if (dgState.active && dgState.progress > 0.1 && dgState.progress < 0.15) {
@@ -212,6 +245,7 @@ function handleWhiteout() {
   if (!s.active && whiteoutWasActive) {
     if (!snow.tapering) beginWhiteoutTaper(snow);
     whiteoutTaperStarted = false;
+    snow.residue = Math.min(snow.residue + 0.3, 1.0);
   }
   whiteoutWasActive = s.active;
 }
