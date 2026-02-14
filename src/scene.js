@@ -26,8 +26,10 @@ import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
-import { updateAudio, isAudioActive, triggerCalvingSound, triggerShootingStarSound,
-         triggerWhiteoutSound, taperWhiteoutSound, triggerDeepGlitchSound } from './audio.js';
+import { updateAudio, isAudioActive, getAudioElapsed,
+         triggerCalvingSound, triggerShootingStarSound,
+         triggerWhiteoutSound, taperWhiteoutSound, triggerDeepGlitchSound,
+         triggerStillness, endStillness } from './audio.js';
 
 let lightCycle = null;
 let glacier = null;
@@ -45,6 +47,7 @@ let whiteoutWasActive = false;
 let whiteoutTaperStarted = false;
 let deepGlitchWasActive = false;
 let calvingWasActive = false;
+let stillnessWasActive = false;
 
 /**
  * @param {import('./renderer.js').Renderer} renderer
@@ -88,14 +91,20 @@ export function drawScene(renderer, state) {
       canActivate: () => true,
       duration: getCalvingDuration,
     });
+    registerEvent(rareEvents, {
+      id: 'stillness',
+      meanInterval: 20 * 60,
+      canActivate: () => getAudioElapsed() > 600 && isAudioActive(),
+      duration: () => 3 + Math.random() * 2,
+    });
   }
 
   // 0. Mood
   updateLightCycle(lightCycle, state.dt);
   const mood = getMood(lightCycle);
 
-  // 0a. Audio: update parameters from mood
-  if (isAudioActive()) updateAudio(mood);
+  // 0a. Audio: update parameters from mood (dt for thermal inertia)
+  if (isAudioActive()) updateAudio(mood, state.dt);
 
   // 0b. Rare events
   updateRareEvents(rareEvents, state.dt, mood);
@@ -107,6 +116,12 @@ export function drawScene(renderer, state) {
   if (calvingEvent.active && !calvingWasActive && isAudioActive()) triggerCalvingSound();
   calvingWasActive = calvingEvent.active;
   updateCalving(calving, calvingEvent);
+
+  // Stillness: the glacier holds its breath. No visual signature.
+  const stillnessEvent = getEventState(rareEvents, 'stillness');
+  if (stillnessEvent.active && !stillnessWasActive) triggerStillness();
+  if (!stillnessEvent.active && stillnessWasActive) endStillness();
+  stillnessWasActive = stillnessEvent.active;
 
   // Render
   const imageData = renderer.getImageData();

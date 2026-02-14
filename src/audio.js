@@ -6,12 +6,17 @@
  * All parameters derived from mood. Touch to activate, touch to mute.
  */
 
-let ctx, master, initialized = false, muted = false, reduced = false;
+let ctx, master, masterLpf, initialized = false, muted = false, reduced = false;
 let droneA, droneB, droneLpf, droneMix;
 let iceFilter, windFilter, windGain, windLfoGain;
 let auroraOsc, auroraGain;
 let eventBus, noiseBuf;
 let whiteoutActive = false;
+let audioElapsed = 0;
+
+// Thermal inertia — lagged phases for stratigraphy
+// Ice is slow (τ=18s), air is medium (τ=6s), light is fast (τ=3s)
+let dronePhase = -1, windPhase = 0, auroraPhase = 0;
 
 // Drone stops: phase → freqA, freqB, lpf cutoff, gain
 const DS = [
@@ -34,7 +39,9 @@ export async function toggleAudio(isReduced) {
     ctx = new AC();
     if (ctx.state === 'suspended') await ctx.resume();
 
-    master = gain(0); master.connect(ctx.destination);
+    master = gain(0);
+    masterLpf = bpf('lowpass', 20000, 0.707);
+    master.connect(masterLpf); masterLpf.connect(ctx.destination);
     noiseBuf = makeNoise(4);
     buildDrone(); buildWind(); buildAurora();
     eventBus = gain(reduced ? 0.25 : 0.5); eventBus.connect(master);
@@ -60,29 +67,60 @@ export function isAudioActive() {
 }
 export function suspendAudio() { if (ctx && ctx.state === 'running') ctx.suspend(); }
 export function resumeAudio() { if (ctx && ctx.state === 'suspended' && !muted) ctx.resume(); }
+export function getAudioElapsed() { return audioElapsed; }
 
-export function updateAudio(mood) {
+export function triggerStillness() {
   if (!isAudioActive()) return;
+  // The glacier holds its breath. Fade to zero τ=0.7s (~95% at 2.1s)
+  master.gain.setTargetAtTime(0, ctx.currentTime, 0.7);
+}
+
+export function endStillness() {
+  if (!isAudioActive()) return;
+  // The drone emerges. τ=1.3s matches activation — opening a window
+  master.gain.setTargetAtTime(0.7, ctx.currentTime, 1.3);
+}
+
+export function updateAudio(mood, dt) {
+  if (!isAudioActive()) return;
+  audioElapsed += dt;
   const t = ctx.currentTime, τ = 3.0;
 
-  const d = lerp(DS, mood.phase);
+  // Thermal inertia: lag each layer's phase at different rates
+  // Circular shortest-path to handle 1.0→0.0 wrap
+  if (dronePhase < 0) { dronePhase = windPhase = auroraPhase = mood.phase; }
+  dronePhase = lagPhase(dronePhase, mood.phase, dt, 18);
+  windPhase = lagPhase(windPhase, mood.phase, dt, 6);
+  auroraPhase = lagPhase(auroraPhase, mood.phase, dt, 3);
+
+  const d = lerp(DS, dronePhase);
   droneA.frequency.setTargetAtTime(d[0], t, τ);
   droneB.frequency.setTargetAtTime(d[1], t, τ);
   droneLpf.frequency.setTargetAtTime(d[2], t, τ);
   droneMix.gain.setTargetAtTime(d[3], t, τ);
 
-  auroraOsc.frequency.setTargetAtTime(d[0] * 3, t, τ);
+  // Aurora: frequency lags (light through ice), gain is raw (light arrives fast)
+  auroraOsc.frequency.setTargetAtTime(lerp(DS, auroraPhase)[0] * 3, t, τ);
   auroraGain.gain.setTargetAtTime(Math.pow(mood.auroraVisibility, 3) * 0.25, t, 0.3);
 
+  // Ice texture follows drone inertia — it's ice
   iceFilter.frequency.setTargetAtTime(300 + (1 - mood.ambientBrightness) * 200, t, τ);
 
   // Skip wind during whiteout — triggerWhiteoutSound owns these params
   if (!whiteoutActive) {
-    const w = lerp(WS, mood.phase); // [gain, freq, Q]
+    const w = lerp(WS, windPhase);
     windGain.gain.setTargetAtTime(w[0], t, τ);
     windFilter.frequency.setTargetAtTime(w[1], t, τ);
     windFilter.Q.setTargetAtTime(w[2], t, τ);
   }
+}
+
+/** Exponential lag with circular shortest-path for phase wrap */
+function lagPhase(current, target, dt, τ) {
+  let delta = target - current;
+  if (delta > 0.5) delta -= 1;
+  if (delta < -0.5) delta += 1;
+  return ((current + delta * (dt / τ)) % 1 + 1) % 1;
 }
 
 // --- Event sounds ---
@@ -126,6 +164,8 @@ export function triggerWhiteoutSound() {
   windGain.gain.linearRampToValueAtTime(0.25, t + 2.0);
   windFilter.frequency.linearRampToValueAtTime(1200, t + 2.0);
   windLfoGain.gain.linearRampToValueAtTime(500, t + 1.0);
+  // Muffle: louder but less distinct — more energy, less clarity
+  masterLpf.frequency.setTargetAtTime(400, t, 0.7);
   // Low rumble
   const o = osc('sine', 35), v = reduced ? 0.06 : 0.12;
   const g = gain(0); g.gain.linearRampToValueAtTime(v, t + 3);
@@ -138,6 +178,8 @@ export function taperWhiteoutSound() {
   if (!isAudioActive()) return;
   whiteoutActive = false; // Release wind params back to updateAudio()
   windLfoGain.gain.linearRampToValueAtTime(200, ctx.currentTime + 4);
+  // Unmuffled: the world sounds crisp again — like stepping outside after a storm
+  masterLpf.frequency.setTargetAtTime(20000, ctx.currentTime, 1.0);
 }
 
 export function triggerDeepGlitchSound() {
