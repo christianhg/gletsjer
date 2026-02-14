@@ -226,6 +226,9 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
   // Ambient brightness from mood
   const ambient = mood.ambientBrightness;
 
+  // Shimmer modulation: ambient light cycle + aurora memory
+  const shimmerMod = (0.2 + ambient * 0.8) * (mood.shimmerBoost || 1.0);
+
   // Animated drift offset
   const drift = time * driftSpeed;
   const parallaxOffset = (drift * 8) | 0;
@@ -297,14 +300,16 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
         x * 0.02 + layerIndex * 50,
         y * 0.035 + depth * 20
       );
+      // Crevasses deepen in darkness, shallow in light
+      const crevasseStrength = 50 + (1.0 - ambient) * 40;
       const crevasseDarken = crevasseDepth > 0.65
-        ? (crevasseDepth - 0.65) * 70 * (0.5 + columnDepth * 0.5)
+        ? (crevasseDepth - 0.65) * crevasseStrength * (0.5 + columnDepth * 0.5)
         : 0;
 
       // --- Surface highlight ---
       let highlight = 0;
       if (pixelsFromSurface < 2) {
-        highlight = (2 - pixelsFromSurface) * 12;
+        highlight = (2 - pixelsFromSurface) * 12 * ambient;
       }
 
       // --- Cyan edge glow ---
@@ -323,7 +328,7 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
       let shimmer = 0;
       const sparkle = simplex3(x * 0.25, y * 0.25, time * 0.08);
       if (sparkle > 0.75) {
-        shimmer = (sparkle - 0.75) * 80 * shimmerAmount;
+        shimmer = (sparkle - 0.75) * 80 * shimmerAmount * shimmerMod;
       }
 
       // --- Color cycling ---

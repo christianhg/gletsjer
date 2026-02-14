@@ -178,6 +178,7 @@ export function drawScene(renderer, state) {
   fogColorBuf[1] = mood.fogColor[1] + auroraResidue * 8;
   fogColorBuf[2] = mood.fogColor[2];
   renderMood.fogColor = fogColorBuf;
+  renderMood.shimmerBoost = 1.0 + auroraResidue * 0.5;
   renderMood.fogFrontX = fogFrontX;
   renderMood.fogFrontDir = fogFrontDir;
   renderMood.fogFrontIntensity = fogFrontIntensity;
