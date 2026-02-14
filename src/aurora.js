@@ -25,8 +25,8 @@ import { simplex2 } from './noise.js';
 // 3 overlapping bands with incommensurate speeds
 const CURTAIN_DEFS = [
   { xOff: 0.0,  freq: 0.008, speed: 0.015, ampY: 0.30, bright: 1.0 },
-  { xOff: 0.4,  freq: 0.011, speed: 0.022, ampY: 0.25, bright: 0.6 },
-  { xOff: 0.7,  freq: 0.006, speed: 0.010, ampY: 0.20, bright: 0.4 },
+  { xOff: 0.4,  freq: 0.011, speed: 0.022, ampY: 0.25, bright: 0.7 },
+  { xOff: 0.7,  freq: 0.006, speed: 0.010, ampY: 0.20, bright: 0.5 },
 ];
 
 // Aurora lives in this vertical region

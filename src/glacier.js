@@ -319,10 +319,11 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
 
       // --- Aurora light on ice highlights ---
       // Aurora tints the surface and near-surface pixels
+      // 8px depth = highlight, not wash. Peaks catch the light.
       let auroraLightR = 0, auroraLightG = 0, auroraLightB = 0;
-      if (auroraIntensity > 0 && pixelsFromSurface < 12) {
+      if (auroraIntensity > 0 && pixelsFromSurface < 8) {
         // Fade aurora light with depth into the ice
-        const auroraFade = 1.0 - (pixelsFromSurface / 12);
+        const auroraFade = 1.0 - (pixelsFromSurface / 8);
         const auroraStr = auroraIntensity * auroraFade * 40; // Scale to visible color offset
         auroraLightR = auroraR * auroraStr;
         auroraLightG = auroraG * auroraStr;
