@@ -103,8 +103,8 @@ export function updateAudio(mood, dt) {
   auroraOsc.frequency.setTargetAtTime(lerp(DS, auroraPhase)[0] * 3, t, τ);
   auroraGain.gain.setTargetAtTime(Math.pow(mood.auroraVisibility, 3) * 0.25, t, 0.3);
 
-  // Ice texture follows drone inertia — it's ice
-  iceFilter.frequency.setTargetAtTime(300 + (1 - mood.ambientBrightness) * 200, t, τ);
+  // Ice texture follows drone inertia — it's ice. d[3] is drone gain (0.42-0.75), proxy for brightness.
+  iceFilter.frequency.setTargetAtTime(300 + (1 - d[3] / 0.75) * 200, t, τ);
 
   // Skip wind during whiteout — triggerWhiteoutSound owns these params
   if (!whiteoutActive) {
