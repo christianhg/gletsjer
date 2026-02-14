@@ -1,21 +1,18 @@
 /**
  * Water Reflection — fjord water post-processing
  *
- * Reads the rendered glacier pixels and mirrors them into the water zone
- * at the bottom of the canvas. Applies darkening, blue tint, and
- * noise-based ripple distortion for a calm fjord look.
+ * Reads the rendered glacier pixels and mirrors them into the water zone.
+ * Applies mood-dependent darkening, tint, and noise-based ripple distortion.
  *
  * Architecture:
  *   - Runs AFTER glacier rendering, BEFORE snow particles
  *   - Reads glacier pixels above the waterline as source
  *   - Writes transformed pixels into the water zone below
- *   - No extra buffers needed — reads and writes the same ImageData
  *   - Processes top-to-bottom so source pixels are never overwritten
- *     before being read (waterline is always below glacier source area)
+ *   - Water tint and floor color shift with light cycle mood
  */
 
 import { simplex2 } from './noise.js';
-import * as palette from './palette.js';
 
 /** Water zone starts at this fraction of canvas height */
 const WATERLINE_FRAC = 0.78;
@@ -30,19 +27,9 @@ const RIPPLE_SPEED = 0.4;
 const RIPPLE_BASE_AMP = 1.2;
 const RIPPLE_DEPTH_AMP = 0.04;
 
-/** Darkening gradient: surface → bottom */
-const DARKEN_SURFACE = 0.65;
-const DARKEN_BOTTOM = 0.25;
-
-/** Blue tint — how much each channel is preserved (rest shifts to water color) */
-const TINT_R = 0.18;
-const TINT_G = 0.38;
-const TINT_B = 0.78;
-
-/** Base water color floor (prevents pure black) */
-const WATER_FLOOR_R = 8;
-const WATER_FLOOR_G = 12;
-const WATER_FLOOR_B = 28;
+/** Darkening gradient base values (modulated by mood) */
+const DARKEN_SURFACE_BASE = 0.65;
+const DARKEN_BOTTOM_BASE = 0.25;
 
 /** Surface highlight */
 const HIGHLIGHT_ROWS = 2;
@@ -51,67 +38,67 @@ const HIGHLIGHT_ROWS = 2;
  * Render water reflection into the pixel buffer.
  *
  * @param {Uint8ClampedArray} data — RGBA pixel data (already has glacier rendered)
- * @param {number} width — buffer width
- * @param {number} height — buffer height
+ * @param {number} width
+ * @param {number} height
  * @param {number} time — elapsed seconds
+ * @param {import('./lightCycle.js').Mood} [mood] — light cycle mood (optional for backwards compat)
  */
-export function renderWater(data, width, height, time) {
+export function renderWater(data, width, height, time, mood) {
   const waterlineY = (height * WATERLINE_FRAC) | 0;
   const waterHeight = height - waterlineY;
 
   if (waterHeight <= 0) return;
 
-  for (let wy = 0; wy < waterHeight; wy++) {
-    // Depth below waterline: 0 at surface, 1 at bottom
-    const depthFrac = wy / waterHeight;
+  // Mood-driven tint (fall back to cold blue defaults if no mood)
+  const tintR = mood ? mood.waterTint[0] : 0.18;
+  const tintG = mood ? mood.waterTint[1] : 0.38;
+  const tintB = mood ? mood.waterTint[2] : 0.78;
+  const floorR = mood ? mood.waterFloorR : 8;
+  const floorG = mood ? mood.waterFloorG : 12;
+  const floorB = mood ? mood.waterFloorB : 28;
 
-    // Vertical mirror with compression (perspective foreshortening)
+  // Darken more at night
+  const darkMod = mood ? (1.0 - mood.ambientBrightness * 0.3) : 1.0;
+  const darkenSurface = DARKEN_SURFACE_BASE * darkMod;
+  const darkenBottom = DARKEN_BOTTOM_BASE * darkMod;
+
+  for (let wy = 0; wy < waterHeight; wy++) {
+    const depthFrac = wy / waterHeight;
     const mirrorY = waterlineY - 1 - ((wy * COMPRESSION) | 0);
     const clampedMirrorY = mirrorY < 0 ? 0 : mirrorY > waterlineY - 1 ? waterlineY - 1 : mirrorY;
-
-    // Ripple amplitude increases with depth
     const rippleAmp = RIPPLE_BASE_AMP + wy * RIPPLE_DEPTH_AMP;
-
-    // Darkening factor: fades from surface to bottom
-    const darken = DARKEN_SURFACE - depthFrac * (DARKEN_SURFACE - DARKEN_BOTTOM);
-
-    // Destination Y
+    const darken = darkenSurface - depthFrac * (darkenSurface - darkenBottom);
     const dstY = waterlineY + wy;
 
     for (let x = 0; x < width; x++) {
-      // --- Ripple distortion: noise-displaced source coordinates ---
       const displaceX = simplex2(
         x * RIPPLE_FREQ_X,
-        (dstY) * RIPPLE_FREQ_Y + time * RIPPLE_SPEED
+        dstY * RIPPLE_FREQ_Y + time * RIPPLE_SPEED
       ) * rippleAmp;
 
       const displaceY = simplex2(
         x * RIPPLE_FREQ_X + 137.5,
-        (dstY) * RIPPLE_FREQ_Y * 0.5 + time * RIPPLE_SPEED * 0.7
+        dstY * RIPPLE_FREQ_Y * 0.5 + time * RIPPLE_SPEED * 0.7
       ) * rippleAmp * 0.3;
 
-      // Source coordinates with ripple offset
       let srcX = (x + displaceX) | 0;
       let srcY = (clampedMirrorY + displaceY) | 0;
 
-      // Clamp to valid glacier area
       if (srcX < 0) srcX = 0;
       if (srcX >= width) srcX = width - 1;
       if (srcY < 0) srcY = 0;
       if (srcY >= waterlineY) srcY = waterlineY - 1;
 
-      // Read source pixel from glacier
       const srcIdx = (srcY * width + srcX) * 4;
       const r = data[srcIdx];
       const g = data[srcIdx + 1];
       const b = data[srcIdx + 2];
 
-      // Apply darkening + blue tint
-      let waterR = (r * darken * TINT_R + WATER_FLOOR_R) | 0;
-      let waterG = (g * darken * TINT_G + WATER_FLOOR_G) | 0;
-      let waterB = (b * darken * TINT_B + WATER_FLOOR_B) | 0;
+      let waterR = (r * darken * tintR + floorR) | 0;
+      let waterG = (g * darken * tintG + floorG) | 0;
+      let waterB = (b * darken * tintB + floorB) | 0;
 
-      // Surface highlight: bright line at waterline
+      // Surface highlight
       if (wy < HIGHLIGHT_ROWS) {
         const hlStrength = (HIGHLIGHT_ROWS - wy) / HIGHLIGHT_ROWS;
         const hl = (hlStrength * 35) | 0;
@@ -120,7 +107,7 @@ export function renderWater(data, width, height, time) {
         waterB = (waterB + hl + 18) | 0;
       }
 
-      // Subtle shimmer on water surface — sparse bright points
+      // Subtle shimmer
       if (depthFrac < 0.3) {
         const shimmer = simplex2(x * 0.2 + time * 0.15, dstY * 0.2 + time * 0.09);
         if (shimmer > 0.72) {
@@ -130,7 +117,6 @@ export function renderWater(data, width, height, time) {
         }
       }
 
-      // Write water pixel
       const dstIdx = (dstY * width + x) * 4;
       data[dstIdx]     = waterR > 255 ? 255 : waterR;
       data[dstIdx + 1] = waterG > 255 ? 255 : waterG;

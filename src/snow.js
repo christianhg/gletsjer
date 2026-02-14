@@ -81,8 +81,9 @@ function spawnParticle(width, height, randomY) {
  * @param {Uint8ClampedArray} data — RGBA pixel data
  * @param {number} time — elapsed seconds
  * @param {number} dt — delta seconds
+ * @param {import('./lightCycle.js').Mood} [mood] — light cycle mood (optional)
  */
-export function updateAndRenderSnow(snow, data, time, dt) {
+export function updateAndRenderSnow(snow, data, time, dt, mood) {
   const { particles, width, height } = snow;
 
   // Global wind: slow horizontal drift that shifts over time
@@ -115,7 +116,8 @@ export function updateAndRenderSnow(snow, data, time, dt) {
     const py = p.y | 0;
 
     const color = p.brightness > 0.7 ? palette.SNOW : palette.FROST;
-    const bright = p.brightness;
+    // Scale brightness by mood (dimmer at night)
+    const bright = p.brightness * (mood ? mood.snowBrightness : 1.0);
 
     drawSnowPixel(data, width, height, px, py, color, bright);
 
