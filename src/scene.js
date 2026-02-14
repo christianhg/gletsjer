@@ -5,11 +5,12 @@
  *   0. Update light cycle → derive mood
  *   1. Sky (mood-dependent gradient)
  *   2. Aurora borealis (renders into sky, outputs per-column light)
- *   3. Glacier layers (terrain occludes aurora + fog + aurora ice lighting)
- *   4. Water reflection (mood-tinted)
- *   5. Snow particles (mood-dimmed)
- *   6. Glitch effects (mood-character)
- *   7. Vignette (edge darkening)
+ *   3. Stars (night sky point lights — terrain occludes them)
+ *   4. Glacier layers (terrain occludes aurora + stars + fog + aurora ice lighting)
+ *   5. Water reflection (mood-tinted)
+ *   6. Snow particles (mood-dimmed)
+ *   7. Glitch effects (mood-character)
+ *   8. Vignette (edge darkening)
  *
  * The mood object flows from lightCycle.js to every renderer.
  * One source of truth, one update per frame.
@@ -21,6 +22,7 @@
 import { createLightCycle, updateLightCycle, getMood } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora } from './aurora.js';
+import { createStars, renderStars } from './stars.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
@@ -34,6 +36,9 @@ let glacier = null;
 
 /** @type {import('./aurora.js').Aurora | null} */
 let aurora = null;
+
+/** @type {import('./stars.js').StarField | null} */
+let stars = null;
 
 /** @type {import('./snow.js').SnowSystem | null} */
 let snow = null;
@@ -58,6 +63,7 @@ export function drawScene(renderer, state) {
     lightCycle = createLightCycle();
     glacier = generateGlacier(width, height);
     aurora = createAurora(width, height);
+    stars = createStars(width, height);
     snow = createSnow(width, height);
     glitch = createGlitch(width, height);
     vignette = createVignette(width, height);
@@ -77,20 +83,23 @@ export function drawScene(renderer, state) {
   // 2. Aurora: renders into sky zone, computes per-column light for ice tinting
   renderAurora(aurora, data, width, height, state.time, mood);
 
-  // 3. Glacier layers: terrain occludes aurora + fog + aurora ice lighting + snow caps
+  // 3. Stars: night sky point lights (terrain will occlude them in step 4)
+  renderStars(stars, data, width, state.time, mood);
+
+  // 4. Glacier layers: terrain occludes aurora + stars + fog + aurora ice lighting + snow caps
   renderGlacierTerrain(glacier, data, state.time, mood, aurora);
 
-  // 4. Water: mirrored reflection with mood-tinted colors
+  // 5. Water: mirrored reflection with mood-tinted colors
   renderWater(data, width, height, state.time, mood);
 
-  // 5. Snow: particles with mood-dimmed brightness
+  // 6. Snow: particles with mood-dimmed brightness
   updateAndRenderSnow(snow, data, state.time, state.dt, mood);
 
-  // 6. Glitch: intermittent post-processing with mood-shifted character
+  // 7. Glitch: intermittent post-processing with mood-shifted character
   updateGlitch(glitch, state.dt);
   applyGlitch(glitch, data, width, height, mood);
 
-  // 7. Vignette: darken edges (final compositing step)
+  // 8. Vignette: darken edges (final compositing step)
   applyVignette(vignette, data);
 
   // Write to buffer canvas
