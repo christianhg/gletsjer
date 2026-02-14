@@ -183,22 +183,36 @@ const PAL_DRIFT = {
 const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
 /**
+ * Date hash: deterministic [0,1) from calendar date + field index.
+ * Same date + index always produces the same value. Different days diverge.
+ */
+function dateHash(fieldIndex) {
+  const d = new Date();
+  const str = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  let h = fieldIndex * 2654435761; // Knuth multiplicative hash seed per field
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  }
+  return ((h >>> 0) % 10000) / 10000; // Normalize to [0, 1)
+}
+
+/**
  * Create the light cycle. Call once at init.
  * @returns {LightCycle}
  */
 export function createLightCycle() {
-  // Init drift: one step at 50% σ so every session starts unique
-  const initStep = (σ) => 0.5 * σ * gaussianRandom();
-
+  // Date-seeded init: same day = same starting conditions
+  const d = PAL_DRIFT;
   return {
-    phase: 0,
+    phase: dateHash(0),                                    // Full 0-1 range
     cycleSpeed: 1 / CYCLE_DURATION,
-    // Drift state
-    speedDrift: initStep(SPEED_σ),
-    skyWarmth:  initStep(PAL_DRIFT.skyWarmth.σ),
-    fogMod:     initStep(PAL_DRIFT.fog.σ),
-    auroraMod:  initStep(PAL_DRIFT.aurora.σ),
-    brightMod:  initStep(PAL_DRIFT.bright.σ),
+    // Drift state: ±50% of clamp range, deterministic per day
+    speedDrift: 0,                                         // NOT seeded — OU finds its own rhythm
+    skyWarmth:  (dateHash(1) - 0.5) * d.skyWarmth.max,
+    fogMod:     (dateHash(2) - 0.5) * d.fog.max,
+    auroraMod:  (dateHash(3) - 0.5) * d.aurora.max,
+    brightMod:  (dateHash(4) - 0.5) * d.bright.max,
+    revolutionCount: 0,
   };
 }
 
@@ -211,14 +225,18 @@ export function updateLightCycle(cycle, dt) {
   // Speed drift: OU mean-reverts, cycle duration wanders 510-690s
   cycle.speedDrift = ouStep(cycle.speedDrift, dt, SPEED_θ, SPEED_σ);
   const effectiveSpeed = cycle.cycleSpeed * Math.max(0.5, 1 + cycle.speedDrift);
+  const prevPhase = cycle.phase;
   cycle.phase = (cycle.phase + dt * effectiveSpeed) % 1;
+  if (cycle.phase < prevPhase) cycle.revolutionCount++;
 
   // Palette drift: random walk (θ=0), hard-clamped
+  // After ~50min (5 revolutions), palette wanders 1.5× faster
+  const palAccel = cycle.revolutionCount >= 5 ? 1.5 : 1.0;
   const d = PAL_DRIFT;
-  cycle.skyWarmth = clamp(ouStep(cycle.skyWarmth, dt, 0, d.skyWarmth.σ), -d.skyWarmth.max, d.skyWarmth.max);
-  cycle.fogMod    = clamp(ouStep(cycle.fogMod,    dt, 0, d.fog.σ),       -d.fog.max,       d.fog.max);
-  cycle.auroraMod = clamp(ouStep(cycle.auroraMod, dt, 0, d.aurora.σ),    -d.aurora.max,    d.aurora.max);
-  cycle.brightMod = clamp(ouStep(cycle.brightMod, dt, 0, d.bright.σ),    -d.bright.max,    d.bright.max);
+  cycle.skyWarmth = clamp(ouStep(cycle.skyWarmth, dt, 0, d.skyWarmth.σ * palAccel), -d.skyWarmth.max, d.skyWarmth.max);
+  cycle.fogMod    = clamp(ouStep(cycle.fogMod,    dt, 0, d.fog.σ       * palAccel), -d.fog.max,       d.fog.max);
+  cycle.auroraMod = clamp(ouStep(cycle.auroraMod, dt, 0, d.aurora.σ    * palAccel), -d.aurora.max,    d.aurora.max);
+  cycle.brightMod = clamp(ouStep(cycle.brightMod, dt, 0, d.bright.σ    * palAccel), -d.bright.max,    d.bright.max);
 }
 
 // --- Pre-allocated mood object (reused every frame, zero GC) ---
