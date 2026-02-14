@@ -47,7 +47,16 @@ export const devAPI = {
   getRareEvents: () => rareEvents,
   getSnow: () => snow,
   getGlitch: () => glitch,
-  forceEvent: (id) => { if (rareEvents) forceEvent(rareEvents, id); },
+  forceEvent: (id) => {
+    if (!rareEvents) return;
+    // Reset edge-detection so re-forcing same event triggers callbacks
+    if (id === 'calving') calvingWasActive = false;
+    if (id === 'shootingStar') shootingStarWasActive = false;
+    if (id === 'whiteout') { whiteoutWasActive = false; whiteoutTaperStarted = false; }
+    if (id === 'deepGlitch') deepGlitchWasActive = false;
+    if (id === 'stillness') stillnessWasActive = false;
+    forceEvent(rareEvents, id);
+  },
   frozen: false,
   speedMultiplier: 1,
 };
