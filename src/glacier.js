@@ -190,12 +190,18 @@ function renderLayer(layer, data, width, height, time, layerIndex) {
   // Animated drift offset — incommensurate with other layers
   const drift = time * driftSpeed;
 
+  // Parallax: horizontal pixel offset for this layer's terrain
+  // Wraps around the heightmap for seamless scrolling
+  const parallaxOffset = (drift * 8) | 0; // Scale drift to pixel units
+
   for (let x = 0; x < width; x++) {
-    const terrainY = (heights[x] * height) | 0;
+    // Sample terrain at parallax-shifted position (wrapping)
+    const srcX = ((x + parallaxOffset) % width + width) % width;
+    const terrainY = (heights[srcX] * height) | 0;
     if (terrainY >= height) continue;
 
     const columnHeight = height - terrainY;
-    const crevasseBase = crevasses[x];
+    const crevasseBase = crevasses[srcX];
 
     for (let y = terrainY; y < height; y++) {
       const i = (y * width + x) * 4;
@@ -276,17 +282,25 @@ function renderSnowCaps(layers, data, width, height, time) {
     const layer = layers[li];
     const maxThickness = li === 0 ? 4 : li === 1 ? 3 : 2;
 
+    // Parallax offset matching renderLayer
+    const drift = time * layer.driftSpeed;
+    const parallaxOffset = (drift * 8) | 0;
+
     for (let x = 0; x < width; x++) {
-      const terrainY = (layer.heights[x] * height) | 0;
+      // Sample at parallax-shifted position
+      const srcX = ((x + parallaxOffset) % width + width) % width;
+      const terrainY = (layer.heights[srcX] * height) | 0;
 
       // Snow coverage: patchy noise
-      const snowNoise = simplex2(x * 0.05 + li * 23, li * 11 + 0.5);
+      const snowNoise = simplex2(srcX * 0.05 + li * 23, li * 11 + 0.5);
       if (snowNoise < 0.0) continue;
 
       // Favor peaks: check if local high point
-      const h = layer.heights[x];
-      const hPrev = x > 0 ? layer.heights[x - 1] : h;
-      const hNext = x < width - 1 ? layer.heights[x + 1] : h;
+      const h = layer.heights[srcX];
+      const prevSrcX = ((srcX - 1) % width + width) % width;
+      const nextSrcX = ((srcX + 1) % width + width) % width;
+      const hPrev = layer.heights[prevSrcX];
+      const hNext = layer.heights[nextSrcX];
       const isPeak = h <= hPrev && h <= hNext;
 
       // Non-peaks need stronger noise to get snow
