@@ -91,8 +91,9 @@ export function updateGlitch(glitch, dt) {
  * @param {Uint8ClampedArray} data — RGBA pixel data
  * @param {number} width
  * @param {number} height
+ * @param {import('./lightCycle.js').Mood} [mood] — light cycle mood (optional)
  */
-export function applyGlitch(glitch, data, width, height) {
+export function applyGlitch(glitch, data, width, height, mood) {
   if (!glitch.active) return;
 
   const { intensity, seed, copy } = glitch;
@@ -100,11 +101,16 @@ export function applyGlitch(glitch, data, width, height) {
   // Snapshot current pixels for effects that need to read source
   copy.set(data);
 
-  // Deterministic effect selection based on burst seed
-  // Each burst gets a consistent combination of effects
-  if (seed < 0.7) rgbSplit(data, copy, width, height, intensity);
+  // Mood-shifted effect selection:
+  // 'chromatic' (warm phases) → favor RGB split, less block displacement
+  // 'corruption' (night) → favor block displacement, less RGB split
+  const character = mood ? mood.glitchCharacter : 'mixed';
+  const rgbThreshold = character === 'chromatic' ? 0.85 : character === 'corruption' ? 0.55 : 0.7;
+  const blockThreshold = character === 'corruption' ? 0.35 : character === 'chromatic' ? 0.65 : 0.5;
+
+  if (seed < rgbThreshold) rgbSplit(data, copy, width, height, intensity);
   if (seed > 0.3 && seed < 0.8) scanlines(data, width, height, intensity);
-  if (seed > 0.5) blockDisplace(data, copy, width, height, intensity, seed);
+  if (seed > blockThreshold) blockDisplace(data, copy, width, height, intensity, seed);
 }
 
 // --- Effects ---

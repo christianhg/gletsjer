@@ -2,23 +2,38 @@
  * Scene — glacier rendering entry point
  *
  * Orchestrates the full scene render pipeline:
- *   1. Glacier (sky + 5 ice layers with parallax + texture drift + snow caps)
- *   2. Water reflection (mirrored, tinted, ripple distortion)
- *   3. Snow particles (additive blend)
- *   4. Glitch effects (intermittent post-processing)
- *   5. Vignette (edge darkening — final compositing step)
+ *   0. Update light cycle → derive mood
+ *   1. Sky (mood-dependent gradient)
+ *   2. Aurora borealis (renders into sky, outputs per-column light)
+ *   3. Glacier layers (terrain occludes aurora + fog + aurora ice lighting)
+ *   4. Water reflection (mood-tinted)
+ *   5. Snow particles (mood-dimmed)
+ *   6. Glitch effects (mood-character)
+ *   7. Vignette (edge darkening)
  *
- * Uses the renderer's pre-allocated ImageData — zero allocations per frame.
+ * The mood object flows from lightCycle.js to every renderer.
+ * One source of truth, one update per frame.
+ *
+ * Key ordering: aurora renders AFTER sky but BEFORE glacier layers.
+ * Glacier terrain paints over aurora pixels → free depth occlusion.
  */
 
-import { generateGlacier, renderGlacier } from './glacier.js';
+import { createLightCycle, updateLightCycle, getMood } from './lightCycle.js';
+import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
+import { createAurora, renderAurora } from './aurora.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
 
+/** @type {import('./lightCycle.js').LightCycle | null} */
+let lightCycle = null;
+
 /** @type {import('./glacier.js').Glacier | null} */
 let glacier = null;
+
+/** @type {import('./aurora.js').Aurora | null} */
+let aurora = null;
 
 /** @type {import('./snow.js').SnowSystem | null} */
 let snow = null;
@@ -40,32 +55,44 @@ export function drawScene(renderer, state) {
 
   // Lazy init — generate terrain and systems once
   if (!glacier) {
+    lightCycle = createLightCycle();
     glacier = generateGlacier(width, height);
+    aurora = createAurora(width, height);
     snow = createSnow(width, height);
     glitch = createGlitch(width, height);
     vignette = createVignette(width, height);
   }
 
-  // Get pre-allocated ImageData and render directly into its pixel buffer
+  // 0. Update light cycle and derive mood (single source of truth)
+  updateLightCycle(lightCycle, state.dt);
+  const mood = getMood(lightCycle);
+
+  // Get pre-allocated ImageData
   const imageData = renderer.getImageData();
   const data = imageData.data;
 
-  // 1. Glacier: sky, ice layers with parallax, snow caps
-  renderGlacier(glacier, data, state.time);
+  // 1. Sky: mood-driven gradient
+  renderGlacierSky(glacier, data, state.time, mood);
 
-  // 2. Water: mirrored reflection with ripple distortion
-  renderWater(data, width, height, state.time);
+  // 2. Aurora: renders into sky zone, computes per-column light for ice tinting
+  renderAurora(aurora, data, width, height, state.time, mood);
 
-  // 3. Snow: particles on top of everything (additive blend)
-  updateAndRenderSnow(snow, data, state.time, state.dt);
+  // 3. Glacier layers: terrain occludes aurora + fog + aurora ice lighting + snow caps
+  renderGlacierTerrain(glacier, data, state.time, mood, aurora);
 
-  // 4. Glitch: intermittent post-processing effects
+  // 4. Water: mirrored reflection with mood-tinted colors
+  renderWater(data, width, height, state.time, mood);
+
+  // 5. Snow: particles with mood-dimmed brightness
+  updateAndRenderSnow(snow, data, state.time, state.dt, mood);
+
+  // 6. Glitch: intermittent post-processing with mood-shifted character
   updateGlitch(glitch, state.dt);
-  applyGlitch(glitch, data, width, height);
+  applyGlitch(glitch, data, width, height, mood);
 
-  // 5. Vignette: darken edges (final compositing step)
+  // 7. Vignette: darken edges (final compositing step)
   applyVignette(vignette, data);
 
-  // Write to buffer canvas (no arg = uses pre-allocated ImageData)
+  // Write to buffer canvas
   renderer.putImageData();
 }
