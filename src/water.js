@@ -115,9 +115,9 @@ export function renderWater(data, width, height, time) {
       if (wy < HIGHLIGHT_ROWS) {
         const hlStrength = (HIGHLIGHT_ROWS - wy) / HIGHLIGHT_ROWS;
         const hl = (hlStrength * 35) | 0;
-        waterR = waterR + hl | 0;
-        waterG = waterG + hl + 8 | 0;
-        waterB = waterB + hl + 18 | 0;
+        waterR = (waterR + hl) | 0;
+        waterG = (waterG + hl + 8) | 0;
+        waterB = (waterB + hl + 18) | 0;
       }
 
       // Subtle shimmer on water surface — sparse bright points
@@ -125,8 +125,8 @@ export function renderWater(data, width, height, time) {
         const shimmer = simplex2(x * 0.2 + time * 0.15, dstY * 0.2 + time * 0.09);
         if (shimmer > 0.72) {
           const shimmerBoost = ((shimmer - 0.72) * 60) | 0;
-          waterG = waterG + shimmerBoost | 0;
-          waterB = waterB + shimmerBoost | 0;
+          waterG = (waterG + shimmerBoost) | 0;
+          waterB = (waterB + shimmerBoost) | 0;
         }
       }
 
