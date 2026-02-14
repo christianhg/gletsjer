@@ -44,6 +44,7 @@
  * @property {number} waterFloorB — base water color floor B
  * @property {string} glitchCharacter — 'chromatic' | 'corruption' | 'mixed'
  * @property {number} snowBrightness — 0→1, dims snow at night
+ * @property {number[]} snowTint — [r,g,b] per-channel multiplier for snow color (blue shift at night)
  * @property {number} ambientBrightness — 0→1, overall scene brightness
  */
 
@@ -66,6 +67,7 @@ const STOPS = [
     waterFloor:    [8, 12, 28],
     glitch:        'mixed',
     snowBright:    0.9,
+    snowTint:      [0.90, 0.90, 0.95],  // Cool blue-white
     ambientBright: 0.85,
   },
   { // 0.20 — Warm amber (low sun)
@@ -82,6 +84,7 @@ const STOPS = [
     waterFloor:    [14, 10, 16],
     glitch:        'chromatic',
     snowBright:    1.0,
+    snowTint:      [1.00, 0.98, 0.92],  // Slightly golden
     ambientBright: 1.0,
   },
   { // 0.38 — Deep violet (twilight)
@@ -98,6 +101,7 @@ const STOPS = [
     waterFloor:    [6, 8, 24],
     glitch:        'mixed',
     snowBright:    0.7,
+    snowTint:      [0.75, 0.78, 0.90],  // Violet-shifted
     ambientBright: 0.7,
   },
   { // 0.55 — Near-black with cyan (deep night, aurora peak)
@@ -116,6 +120,7 @@ const STOPS = [
     waterFloor:    [3, 5, 14],
     glitch:        'corruption',
     snowBright:    0.5,
+    snowTint:      [0.55, 0.60, 0.75],  // Blue-shifted, dim — moonlit snow
     ambientBright: 0.5,
   },
   { // 0.78 — Pale rose (dawn)
@@ -132,6 +137,7 @@ const STOPS = [
     waterFloor:    [10, 8, 18],
     glitch:        'chromatic',
     snowBright:    0.8,
+    snowTint:      [0.82, 0.80, 0.85],  // Faint rose warmth
     ambientBright: 0.75,
   },
 ];
@@ -178,6 +184,7 @@ const _mood = {
   waterFloorB: 0,
   glitchCharacter: 'mixed',
   snowBrightness: 0,
+  snowTint: [0, 0, 0],
   ambientBrightness: 0,
 };
 
@@ -228,6 +235,7 @@ export function getMood(cycle) {
   _mood.waterFloorG = a.waterFloor[1] + (b.waterFloor[1] - a.waterFloor[1]) * t;
   _mood.waterFloorB = a.waterFloor[2] + (b.waterFloor[2] - a.waterFloor[2]) * t;
   _mood.snowBrightness = a.snowBright + (b.snowBright - a.snowBright) * t;
+  lerpRGB(_mood.snowTint, a.snowTint, b.snowTint, t);
   _mood.ambientBrightness = a.ambientBright + (b.ambientBright - a.ambientBright) * t;
 
   // Glitch character: use the nearer stop's character (no interpolation for enums)

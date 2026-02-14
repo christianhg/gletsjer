@@ -42,8 +42,9 @@ const HIGHLIGHT_ROWS = 2;
  * @param {number} height
  * @param {number} time — elapsed seconds
  * @param {import('./lightCycle.js').Mood} [mood] — light cycle mood (optional for backwards compat)
+ * @param {number} [rippleBoost=1.0] — ripple amplitude multiplier (from calving events)
  */
-export function renderWater(data, width, height, time, mood) {
+export function renderWater(data, width, height, time, mood, rippleBoost) {
   const waterlineY = (height * WATERLINE_FRAC) | 0;
   const waterHeight = height - waterlineY;
 
@@ -66,7 +67,8 @@ export function renderWater(data, width, height, time, mood) {
     const depthFrac = wy / waterHeight;
     const mirrorY = waterlineY - 1 - ((wy * COMPRESSION) | 0);
     const clampedMirrorY = mirrorY < 0 ? 0 : mirrorY > waterlineY - 1 ? waterlineY - 1 : mirrorY;
-    const rippleAmp = RIPPLE_BASE_AMP + wy * RIPPLE_DEPTH_AMP;
+    const boost = rippleBoost || 1.0;
+    const rippleAmp = (RIPPLE_BASE_AMP + wy * RIPPLE_DEPTH_AMP) * boost;
     const darken = darkenSurface - depthFrac * (darkenSurface - darkenBottom);
     const dstY = waterlineY + wy;
 
