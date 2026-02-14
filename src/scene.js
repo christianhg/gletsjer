@@ -210,11 +210,18 @@ export function drawScene(renderer, state) {
   const dgState = getEventState(rareEvents, 'deepGlitch');
   if (dgState.active && dgState.progress > 0.1 && dgState.progress < 0.15) {
     invertFrame(data, width, height);
-    applyDataBleed(data, width, height, glitch.seed);
+    applyDataBleed(data, width, height, glitch.seed, glitch);
   }
 
   // 8. Vignette
   applyVignette(vignette, data);
+
+  // 9. Dead pixel — screen damage, over everything including vignette
+  const dp = glitch.deadPixel;
+  if (dp && performance.now() - dp.birth < 30000) {
+    const di = (dp.y * width + dp.x) * 4;
+    data[di] = dp.r; data[di + 1] = dp.g; data[di + 2] = dp.b; data[di + 3] = 255;
+  } else if (dp) { glitch.deadPixel = null; }
 
   renderer.putImageData();
 }

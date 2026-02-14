@@ -46,6 +46,8 @@ export function createGlitch(width, height) {
     seed: 0,
     // Pre-allocated copy buffer for effects that read source pixels
     copy: new Uint8ClampedArray(width * height * 4),
+    // Dead pixel: one stuck pixel after data bleed, persists 30s
+    deadPixel: null,
   };
 }
 
@@ -212,13 +214,18 @@ const DNA = 'function lagPhase(current,target,dt,τ){let delta=target-current;if
  * @param {number} width
  * @param {number} height
  * @param {number} seed — glitch seed for deterministic positioning
+ * @param {GlitchController} glitch — state object (captures dead pixel)
  */
-export function applyDataBleed(data, width, height, seed) {
+export function applyDataBleed(data, width, height, seed, glitch) {
   const patchW = 4 + ((seededRandom(seed * 31.7) * 7) | 0);   // 4-10px
   const patchH = 1 + ((seededRandom(seed * 47.3) * 3) | 0);   // 1-3px
   const px = (seededRandom(seed * 71.1) * (width - patchW)) | 0;
   const py = (seededRandom(seed * 89.3) * (height - patchH)) | 0;
   const byteStart = (seededRandom(seed * 113.7) * DNA.length) | 0;
+
+  // Pick one random pixel from the patch for dead pixel residue
+  const dpX = px + ((seededRandom(seed * 137.9) * patchW) | 0);
+  const dpY = py + ((seededRandom(seed * 151.3) * patchH) | 0);
 
   let bi = byteStart;
   for (let y = py; y < py + patchH; y++) {
@@ -228,6 +235,10 @@ export function applyDataBleed(data, width, height, seed) {
       data[idx + 1] = DNA.charCodeAt((bi + 1) % DNA.length); // G
       data[idx + 2] = DNA.charCodeAt((bi + 2) % DNA.length); // B
       // Alpha stays 255
+      // Capture dead pixel color when we hit the chosen coordinate
+      if (x === dpX && y === dpY) {
+        glitch.deadPixel = { x: dpX, y: dpY, r: data[idx], g: data[idx + 1], b: data[idx + 2], birth: performance.now() };
+      }
       bi += 3;
     }
   }
