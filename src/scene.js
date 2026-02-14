@@ -24,7 +24,7 @@ import { initShootingStar, renderShootingStar } from './shootingStar.js';
 import { createCalving, updateCalving, applyCalving, getCalvingDuration } from './calving.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
-import { createGlitch, updateGlitch, applyGlitch } from './glitch.js';
+import { createGlitch, updateGlitch, applyGlitch, applyDataBleed } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
 import { updateAudio, isAudioActive, getAudioElapsed,
          triggerCalvingSound, triggerShootingStarSound,
@@ -156,6 +156,7 @@ export function drawScene(renderer, state) {
   const dgState = getEventState(rareEvents, 'deepGlitch');
   if (dgState.active && dgState.progress > 0.1 && dgState.progress < 0.15) {
     invertFrame(data, width, height);
+    applyDataBleed(data, width, height, glitch.seed);
   }
 
   // 8. Vignette

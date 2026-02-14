@@ -198,6 +198,41 @@ function blockDisplace(data, copy, width, height, intensity, seed) {
   }
 }
 
+// --- Data Bleed ---
+// The glacier's DNA — its own thermal inertia function, as source bytes.
+// During deep glitch inversion, the glacier bleeds its own physics as pixels.
+const DNA = 'function lagPhase(current,target,dt,τ){let delta=target-current;if(delta>0.5)delta-=1;if(delta<-0.5)delta+=1;return((current+delta*(dt/τ))%1+1)%1}';
+
+/**
+ * Overwrite a small pixel patch with source code bytes as RGB values.
+ * Called after invertFrame during deep glitch inversion (progress 0.10-0.15).
+ * The patch sits un-inverted on the inverted frame — a window into the source.
+ *
+ * @param {Uint8ClampedArray} data — RGBA pixel buffer
+ * @param {number} width
+ * @param {number} height
+ * @param {number} seed — glitch seed for deterministic positioning
+ */
+export function applyDataBleed(data, width, height, seed) {
+  const patchW = 4 + ((seededRandom(seed * 31.7) * 7) | 0);   // 4-10px
+  const patchH = 1 + ((seededRandom(seed * 47.3) * 3) | 0);   // 1-3px
+  const px = (seededRandom(seed * 71.1) * (width - patchW)) | 0;
+  const py = (seededRandom(seed * 89.3) * (height - patchH)) | 0;
+  const byteStart = (seededRandom(seed * 113.7) * DNA.length) | 0;
+
+  let bi = byteStart;
+  for (let y = py; y < py + patchH; y++) {
+    for (let x = px; x < px + patchW; x++) {
+      const idx = (y * width + x) * 4;
+      data[idx]     = DNA.charCodeAt(bi % DNA.length);       // R
+      data[idx + 1] = DNA.charCodeAt((bi + 1) % DNA.length); // G
+      data[idx + 2] = DNA.charCodeAt((bi + 2) % DNA.length); // B
+      // Alpha stays 255
+      bi += 3;
+    }
+  }
+}
+
 // --- Util ---
 
 /**

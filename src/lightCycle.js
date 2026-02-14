@@ -145,24 +145,80 @@ const STOPS = [
 // Full cycle duration in seconds (~10 minutes)
 const CYCLE_DURATION = 600;
 
+// --- Drift: Ornstein-Uhlenbeck + random walk ---
+// The glacier never repeats. Speed wanders (OU, mean-reverts),
+// palette wanders (random walk, hard-clamped).
+
+/** Box-Muller transform. Zero allocation. */
+function gaussianRandom() {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  return Math.sqrt(-2 * Math.log(u1 || 0.001)) * Math.cos(2 * Math.PI * u2);
+}
+
+/**
+ * Ornstein-Uhlenbeck step (Euler-Maruyama discretization).
+ * When θ=0, degenerates to pure random walk (no mean reversion).
+ * @param {number} x — current deviation from mean
+ * @param {number} dt — time step (seconds)
+ * @param {number} θ — mean reversion rate (0 = pure random walk)
+ * @param {number} σ — volatility
+ */
+function ouStep(x, dt, θ, σ) {
+  return x - θ * x * dt + σ * Math.sqrt(dt) * gaussianRandom();
+}
+
+// Speed drift: OU process, mean-reverts. Cycle duration wanders 510-690s.
+const SPEED_θ = 0.002;  // τ_revert ≈ 500s ≈ 8 min
+const SPEED_σ = 0.003;  // 95% range ≈ ±9.4%, 3σ excursions to ±14%
+
+// Palette drift: random walk (θ=0), hard-clamped to ±max.
+const PAL_DRIFT = {
+  skyWarmth: { σ: 0.002, max: 1.0 },   // Shifts sky R↑B↓ or R↓B↑
+  fog:       { σ: 0.003, max: 0.15 },   // Shifts fogDensity
+  aurora:    { σ: 0.002, max: 0.20 },   // Shifts auroraVisibility (cubic downstream)
+  bright:    { σ: 0.002, max: 0.12 },   // Shifts ambientBrightness
+};
+
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+
 /**
  * Create the light cycle. Call once at init.
  * @returns {LightCycle}
  */
 export function createLightCycle() {
+  // Init drift: one step at 50% σ so every session starts unique
+  const initStep = (σ) => 0.5 * σ * gaussianRandom();
+
   return {
     phase: 0,
     cycleSpeed: 1 / CYCLE_DURATION,
+    // Drift state
+    speedDrift: initStep(SPEED_σ),
+    skyWarmth:  initStep(PAL_DRIFT.skyWarmth.σ),
+    fogMod:     initStep(PAL_DRIFT.fog.σ),
+    auroraMod:  initStep(PAL_DRIFT.aurora.σ),
+    brightMod:  initStep(PAL_DRIFT.bright.σ),
   };
 }
 
 /**
- * Advance the light cycle.
+ * Advance the light cycle. Speed drift makes every revolution unique.
  * @param {LightCycle} cycle
  * @param {number} dt — delta seconds
  */
 export function updateLightCycle(cycle, dt) {
-  cycle.phase = (cycle.phase + dt * cycle.cycleSpeed) % 1;
+  // Speed drift: OU mean-reverts, cycle duration wanders 510-690s
+  cycle.speedDrift = ouStep(cycle.speedDrift, dt, SPEED_θ, SPEED_σ);
+  const effectiveSpeed = cycle.cycleSpeed * Math.max(0.5, 1 + cycle.speedDrift);
+  cycle.phase = (cycle.phase + dt * effectiveSpeed) % 1;
+
+  // Palette drift: random walk (θ=0), hard-clamped
+  const d = PAL_DRIFT;
+  cycle.skyWarmth = clamp(ouStep(cycle.skyWarmth, dt, 0, d.skyWarmth.σ), -d.skyWarmth.max, d.skyWarmth.max);
+  cycle.fogMod    = clamp(ouStep(cycle.fogMod,    dt, 0, d.fog.σ),       -d.fog.max,       d.fog.max);
+  cycle.auroraMod = clamp(ouStep(cycle.auroraMod, dt, 0, d.aurora.σ),    -d.aurora.max,    d.aurora.max);
+  cycle.brightMod = clamp(ouStep(cycle.brightMod, dt, 0, d.bright.σ),    -d.bright.max,    d.bright.max);
 }
 
 // --- Pre-allocated mood object (reused every frame, zero GC) ---
@@ -240,6 +296,18 @@ export function getMood(cycle) {
 
   // Glitch character: use the nearer stop's character (no interpolation for enums)
   _mood.glitchCharacter = t < 0.5 ? a.glitch : b.glitch;
+
+  // --- Palette drift: every revolution is unique ---
+  // Sky warmth: shift R up + B down (positive = warmer, negative = cooler)
+  const sw = cycle.skyWarmth;
+  _mood.skyTop[0]    = clamp(_mood.skyTop[0]    + sw * 8,  0, 255);
+  _mood.skyTop[2]    = clamp(_mood.skyTop[2]    - sw * 5,  0, 255);
+  _mood.skyBottom[0] = clamp(_mood.skyBottom[0] + sw * 12, 0, 255);
+  _mood.skyBottom[2] = clamp(_mood.skyBottom[2] - sw * 8,  0, 255);
+  // Fog, aurora, brightness
+  _mood.fogDensity       = clamp(_mood.fogDensity       + cycle.fogMod,    0, 1);
+  _mood.auroraVisibility = clamp(_mood.auroraVisibility + cycle.auroraMod, 0, 1);
+  _mood.ambientBrightness = clamp(_mood.ambientBrightness + cycle.brightMod, 0.3, 1);
 
   return _mood;
 }
