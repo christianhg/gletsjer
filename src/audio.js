@@ -81,7 +81,7 @@ export function endStillness() {
   master.gain.setTargetAtTime(0.7, ctx.currentTime, 1.3);
 }
 
-export function updateAudio(mood, dt) {
+export function updateAudio(mood, dt, fogFrontX) {
   if (!isAudioActive()) return;
   audioElapsed += dt;
   const t = ctx.currentTime, τ = 3.0;
@@ -110,7 +110,10 @@ export function updateAudio(mood, dt) {
   if (!whiteoutActive) {
     const w = lerp(WS, windPhase);
     windGain.gain.setTargetAtTime(w[0], t, τ);
-    windFilter.frequency.setTargetAtTime(w[1], t, τ);
+    // Fog front muffles wind: reduce bandpass center 25% when front near center
+    let windFreq = w[1];
+    if (fogFrontX >= 0.3 && fogFrontX <= 0.7) windFreq *= 0.75;
+    windFilter.frequency.setTargetAtTime(windFreq, t, τ);
     windFilter.Q.setTargetAtTime(w[2], t, τ);
   }
 }

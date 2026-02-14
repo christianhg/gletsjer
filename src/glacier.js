@@ -215,10 +215,13 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
   const hlB = mood.highlightTint[2];
 
   // Fog: base amount scaled by mood density
-  const fogAmount = fogBase * mood.fogDensity;
+  const fogAmountBase = fogBase * mood.fogDensity;
   const fogR = mood.fogColor[0];
   const fogG = mood.fogColor[1];
   const fogB = mood.fogColor[2];
+  const ffX = mood.fogFrontX;
+  const ffDir = mood.fogFrontDir;
+  const ffInt = mood.fogFrontIntensity;
 
   // Ambient brightness from mood
   const ambient = mood.ambientBrightness;
@@ -238,6 +241,15 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
     const srcX = ((x + parallaxOffset) % width + width) % width;
     const terrainY = (heights[srcX] * height) | 0;
     if (terrainY >= height) continue;
+
+    // Per-column fog: base + fog front contribution
+    let fogAmount = fogAmountBase;
+    if (ffX >= 0) {
+      const dist = (x / width - ffX) * ffDir;
+      const edgeW = 0.12;
+      const ft = Math.max(0, Math.min(1, (dist + edgeW) / (2 * edgeW)));
+      fogAmount = Math.min(1.0, fogAmount + ft * ft * (3 - 2 * ft) * ffInt * 0.3);
+    }
 
     const columnHeight = height - terrainY;
     const crevasseBase = crevasses[srcX];
