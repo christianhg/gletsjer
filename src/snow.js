@@ -28,7 +28,7 @@ export function createSnow(width, height) {
     particles[i] = spawnParticle(width, height, i < NORMAL_ACTIVE);
     particles[i].active = i < NORMAL_ACTIVE;
   }
-  return { particles, width, height, windMultiplier: 1.0, brightnessOverride: 0.0, tapering: false };
+  return { particles, width, height, windMultiplier: 1.0, brightnessOverride: 0.0, tapering: false, residue: 0.0 };
 }
 
 function spawnParticle(width, height, randomY) {
@@ -77,6 +77,11 @@ export function updateAndRenderSnow(snow, data, time, dt, mood) {
   const { particles, width, height, brightnessOverride } = snow;
   const wind = Math.sin(time * 0.07) * 0.5 * snow.windMultiplier;
 
+  // Decay snow residue (τ = 300s = 5min)
+  if (snow.residue > 0.001) {
+    snow.residue *= Math.exp(-dt / 300);
+  }
+
   // Decay whiteout toward normal
   if (snow.tapering) {
     snow.windMultiplier += (1.0 - snow.windMultiplier) * dt * 0.8;
@@ -114,7 +119,8 @@ export function updateAndRenderSnow(snow, data, time, dt, mood) {
     if (p.x >= width) p.x -= width;
 
     if (p.y >= height) {
-      if (snow.tapering && i >= NORMAL_ACTIVE) { p.active = false; continue; }
+      const activeLimit = NORMAL_ACTIVE + ((snow.residue * 40) | 0);
+      if (snow.tapering && i >= activeLimit) { p.active = false; continue; }
       p.x = Math.random() * width;
       p.y = -1 - Math.random() * 5;
       p.fallSpeed = 3 + Math.random() * 8;

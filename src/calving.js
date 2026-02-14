@@ -70,6 +70,8 @@ const BASE_DURATION = 3.0;
  * @property {boolean} wasActive - Edge detection for event activation
  * @property {Uint8ClampedArray} copyBuf - Pre-allocated buffer for block copy
  * @property {Int8Array} jaggedOffset - Per-column height offset for jagged top edge
+ * @property {Array<Object|null>} scars - Ring buffer of calving scar positions (max 4)
+ * @property {number} scarIdx - Next write index in scar ring buffer
  * @property {number} width - Canvas width
  * @property {number} height - Canvas height
  */
@@ -85,6 +87,10 @@ export function createCalving(width, height) {
   // Pre-allocate copy buffer for max possible block
   const bufSize = BLOCK_W_MAX * BLOCK_H_MAX * 4;
 
+  // Pre-allocate scar jagged offset arrays (4 scars × BLOCK_W_MAX)
+  const scarJagged = [];
+  for (let s = 0; s < 4; s++) scarJagged.push(new Int8Array(BLOCK_W_MAX));
+
   return {
     blockX: 0,
     blockY: 0,
@@ -95,6 +101,9 @@ export function createCalving(width, height) {
     wasActive: false,
     copyBuf: new Uint8ClampedArray(bufSize),
     jaggedOffset: new Int8Array(BLOCK_W_MAX),
+    scars: [null, null, null, null],
+    scarIdx: 0,
+    scarJagged,
     width,
     height,
   };
@@ -121,6 +130,18 @@ export function updateCalving(calving, eventState) {
   // Rising edge: event just activated — pick a new block
   if (active && !calving.wasActive) {
     pickCalvingBlock(calving);
+  }
+  // Falling edge: event just ended — snapshot scar
+  if (!active && calving.wasActive) {
+    const idx = calving.scarIdx;
+    const jagged = calving.scarJagged[idx];
+    jagged.set(calving.jaggedOffset.subarray(0, calving.blockW));
+    calving.scars[idx] = {
+      blockX: calving.blockX, blockY: calving.blockY,
+      blockW: calving.blockW, blockH: calving.blockH,
+      jaggedOffset: jagged, birth: performance.now(),
+    };
+    calving.scarIdx = (idx + 1) % 4;
   }
   calving.wasActive = active;
 
@@ -199,6 +220,38 @@ export function applyCalving(calving, data, width, height, eventState) {
 
   if (opacity > 0.01) {
     displaceBlock(calving, data, width, height, fallDist, opacity, 1.0);
+  }
+}
+
+/**
+ * Apply calving scars — faint darkened patches from past calving events.
+ * Call AFTER applyCalving, BEFORE water.
+ *
+ * @param {CalvingSystem} calving
+ * @param {Uint8ClampedArray} data
+ * @param {number} width
+ * @param {number} height
+ */
+export function applyScars(calving, data, width, height) {
+  const now = performance.now();
+  for (let s = 0; s < 4; s++) {
+    const scar = calving.scars[s];
+    if (!scar) continue;
+    const age = (now - scar.birth) / 1000;
+    const opacity = Math.exp(-age / 300); // τ = 300s = 5min
+    if (opacity < 0.01) { calving.scars[s] = null; continue; }
+    const darken = 1 - opacity * 0.18; // 18% darkening at full opacity
+    for (let dy = 0; dy < scar.blockH; dy++) {
+      for (let dx = 0; dx < scar.blockW; dx++) {
+        const py = scar.blockY + scar.jaggedOffset[dx] + dy;
+        const px = scar.blockX + dx;
+        if (px < 0 || px >= width || py < 0 || py >= height) continue;
+        const i = (py * width + px) * 4;
+        data[i]     = (data[i] * darken) | 0;
+        data[i + 1] = (data[i + 1] * darken) | 0;
+        data[i + 2] = (data[i + 2] * darken) | 0;
+      }
+    }
   }
 }
 
