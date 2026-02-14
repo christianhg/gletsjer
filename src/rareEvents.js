@@ -127,6 +127,32 @@ export function getEventState(scheduler, id) {
   return scheduler.states.get(id);
 }
 
+/**
+ * Force-fire an event immediately, bypassing Poisson timing and global mutex.
+ * If another event is active, it ends instantly. Dev panel only.
+ * @param {RareEventScheduler} scheduler
+ * @param {string} id
+ */
+export function forceEvent(scheduler, id) {
+  // End any active event
+  if (scheduler.activeEvent) {
+    const prev = scheduler.states.get(scheduler.activeEvent);
+    prev.active = false;
+    prev.intensity = 0;
+    prev.progress = 0;
+    prev.elapsed = 0;
+  }
+  scheduler.globalCooldown = 0;
+  const def = scheduler.defs.get(id);
+  const state = scheduler.states.get(id);
+  state.active = true;
+  state.elapsed = 0;
+  state.duration = def.duration();
+  state.progress = 0;
+  state.intensity = 0;
+  scheduler.activeEvent = id;
+}
+
 function poissonDelay(mean) {
   const u = 0.001 + Math.random() * 0.998;
   return -Math.log(1 - u) * mean;

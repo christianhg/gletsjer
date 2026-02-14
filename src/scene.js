@@ -19,7 +19,7 @@ import { createLightCycle, updateLightCycle, getMood } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
-import { createRareEvents, registerEvent, updateRareEvents, getEventState } from './rareEvents.js';
+import { createRareEvents, registerEvent, updateRareEvents, getEventState, forceEvent } from './rareEvents.js';
 import { initShootingStar, renderShootingStar } from './shootingStar.js';
 import { createCalving, updateCalving, applyCalving, getCalvingDuration } from './calving.js';
 import { renderWater } from './water.js';
@@ -40,6 +40,26 @@ let calving = null;
 let snow = null;
 let glitch = null;
 let vignette = null;
+
+// --- Dev panel API (reads/writes internal state) ---
+export const devAPI = {
+  getLightCycle: () => lightCycle,
+  getRareEvents: () => rareEvents,
+  getSnow: () => snow,
+  getGlitch: () => glitch,
+  forceEvent: (id) => {
+    if (!rareEvents) return;
+    // Reset edge-detection so re-forcing same event triggers callbacks
+    if (id === 'calving') { calvingWasActive = false; if (calving) calving.wasActive = false; }
+    if (id === 'shootingStar') shootingStarWasActive = false;
+    if (id === 'whiteout') { whiteoutWasActive = false; whiteoutTaperStarted = false; }
+    if (id === 'deepGlitch') deepGlitchWasActive = false;
+    if (id === 'stillness') stillnessWasActive = false;
+    forceEvent(rareEvents, id);
+  },
+  frozen: false,
+  speedMultiplier: 1,
+};
 
 // Rare event edge-detection flags
 let shootingStarWasActive = false;
@@ -99,8 +119,9 @@ export function drawScene(renderer, state) {
     });
   }
 
-  // 0. Mood
-  updateLightCycle(lightCycle, state.dt);
+  // 0. Mood (dev panel: freeze stops phase, speedMultiplier scales dt)
+  const cycleDt = devAPI.frozen ? 0 : state.dt * devAPI.speedMultiplier;
+  updateLightCycle(lightCycle, cycleDt);
   const mood = getMood(lightCycle);
 
   // 0a. Audio: update parameters from mood (dt for thermal inertia)
