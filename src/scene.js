@@ -225,8 +225,8 @@ export function drawScene(renderer, state) {
   applyCalving(calving, data, width, height, calvingEvent);
   applyScars(calving, data, width, height);
 
-  // 5. Water (with calving ripple boost)
-  renderWater(data, width, height, state.time, renderMood, calving.rippleBoost);
+  // 5. Water (with calving ripple boost, aurora light, terrain contour)
+  renderWater(data, width, height, state.time, renderMood, calving.rippleBoost, aurora, glacier.layers);
 
   // 6. Snow (whiteout-capable, blue-shifted)
   updateAndRenderSnow(snow, data, state.time, state.dt, renderMood);
