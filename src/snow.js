@@ -7,9 +7,15 @@
  */
 
 import * as palette from './palette.js';
+import { dateHash } from './lightCycle.js';
 
 const POOL_SIZE = 120;
 const NORMAL_ACTIVE = 40;
+
+// Daily snow character from dateHash
+const SNOW_SPEED_BIAS = 0.7 + dateHash(109) * 0.6;   // 0.7-1.3×: slow to fast fall
+const SNOW_DRIFT_BIAS = 0.7 + dateHash(110) * 0.6;   // 0.7-1.3×: calm to gusty drift
+const SNOW_SIZE_CHANCE = 0.03 + dateHash(111) * 0.27; // 3-30%: rare to frequent 2px flakes
 
 /**
  * @typedef {Object} SnowSystem
@@ -35,12 +41,12 @@ function spawnParticle(width, height, randomY) {
   return {
     x: Math.random() * width,
     y: randomY ? Math.random() * height : -1 - Math.random() * 10,
-    fallSpeed: 3 + Math.random() * 8,
+    fallSpeed: (3 + Math.random() * 8) * SNOW_SPEED_BIAS,
     driftFreq: 0.3 + Math.random() * 0.7,
-    driftAmp: 0.3 + Math.random() * 0.8,
+    driftAmp: (0.3 + Math.random() * 0.8) * SNOW_DRIFT_BIAS,
     phase: Math.random() * Math.PI * 2,
     brightness: 0.4 + Math.random() * 0.6,
-    size: Math.random() < 0.15 ? 2 : 1,
+    size: Math.random() < SNOW_SIZE_CHANCE ? 2 : 1,
     active: true,
   };
 }
@@ -128,7 +134,7 @@ export function updateAndRenderSnow(snow, data, time, dt, mood, cameraDriftDelta
       if (snow.tapering && i >= activeLimit) { p.active = false; continue; }
       p.x = Math.random() * width;
       p.y = -1 - Math.random() * 5;
-      p.fallSpeed = 3 + Math.random() * 8;
+      p.fallSpeed = (3 + Math.random() * 8) * SNOW_SPEED_BIAS;
     }
 
     if (p.y < 0) continue;

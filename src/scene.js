@@ -18,6 +18,7 @@
  */
 
 import { createLightCycle, updateLightCycle, getMood, dateHash, isDoomsday, dayTier } from './lightCycle.js';
+import { seed } from './noise.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora, renderLightShafts } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
@@ -116,6 +117,7 @@ export function drawScene(renderer, state) {
 
   if (!glacier) {
     lightCycle = createLightCycle();
+    seed((dateHash(100) * 2147483647) | 0);  // Daily terrain identity
     glacier = generateGlacier(width, height);
     aurora = createAurora(width, height);
     stars = createStars(width, height);
@@ -136,34 +138,41 @@ export function drawScene(renderer, state) {
       ? 5 + dateHash(66) * 3
       : { common: 1, mood: 1 + dateHash(66), extreme: 2 + dateHash(66) * 2 }[tier];
 
+    // Seasonal event weighting: daily 0.5-2.0× multiplier on meanInterval
+    // Lower multiplier = more frequent. epicCalving and stillness excluded.
+    const seasonStar    = 0.5 + dateHash(103) * 1.5;  // 0.5-2.0×
+    const seasonWhite   = 0.5 + dateHash(104) * 1.5;
+    const seasonGlitch  = 0.5 + dateHash(105) * 1.5;
+    const seasonCalving = 0.5 + dateHash(106) * 1.5;
+
     rareEvents = createRareEvents();
     registerEvent(rareEvents, {
       id: 'shootingStar',
-      meanInterval: 45 * 60,
+      meanInterval: 45 * 60 * seasonStar,
       canActivate: (mood) => mood.starVisibility > 0.5,
       duration: () => 0.4 + Math.random() * 0.2,
     });
     registerEvent(rareEvents, {
       id: 'whiteout',
-      meanInterval: 60 * 60,
+      meanInterval: 60 * 60 * seasonWhite,
       canActivate: () => true,
       duration: () => 10 + Math.random() * 5,
     });
     registerEvent(rareEvents, {
       id: 'deepGlitch',
-      meanInterval: initDoomsday ? 45 * 60 : 90 * 60,
+      meanInterval: (initDoomsday ? 45 * 60 : 90 * 60) * seasonGlitch,
       canActivate: () => true,
       duration: () => 1 + Math.random() * 1,
     });
     registerEvent(rareEvents, {
       id: 'calving',
-      meanInterval: (20 * 60) / calvingMult,
+      meanInterval: (20 * 60) / calvingMult * seasonCalving,
       canActivate: () => true,
       duration: getCalvingDuration,
     });
     registerEvent(rareEvents, {
       id: 'epicCalving',
-      meanInterval: 60 * 60,  // 60min — no doomsday bias
+      meanInterval: 60 * 60,  // 60min — no seasonal bias, no doomsday bias
       canActivate: () => true,
       duration: getEpicCalvingDuration,
     });

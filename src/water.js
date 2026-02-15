@@ -15,6 +15,7 @@
  */
 
 import { simplex2 } from './noise.js';
+import { dateHash } from './lightCycle.js';
 
 /** Water zone starts at this fraction of canvas height */
 const WATERLINE_FRAC = 0.78;
@@ -22,11 +23,11 @@ const WATERLINE_FRAC = 0.78;
 /** Vertical compression — perspective foreshortening */
 const COMPRESSION = 0.85;
 
-/** Ripple noise parameters */
+/** Ripple noise parameters — daily character from dateHash */
 const RIPPLE_FREQ_X = 0.08;
 const RIPPLE_FREQ_Y = 0.15;
 const RIPPLE_SPEED = 0.4;
-const RIPPLE_BASE_AMP = 1.2;
+const RIPPLE_BASE_AMP = 0.8 + dateHash(107) * 1.0;   // 0.8-1.8: calm to choppy
 const RIPPLE_DEPTH_AMP = 0.04;
 
 /** Darkening gradient base values (modulated by mood) */
@@ -39,8 +40,8 @@ const AURORA_WATER_ROWS = 8;
 /** Surface highlight */
 const HIGHLIGHT_ROWS = 2;
 
-/** Surface current — slow horizontal drift */
-const CURRENT_SPEED = 0.006;
+/** Surface current — slow horizontal drift, daily character */
+const CURRENT_SPEED = 0.003 + dateHash(108) * 0.006;  // 0.003-0.009
 const CURRENT_DEPTH_SCALE = 0.3;
 
 /** Deep tint blend — how much waterDeep colors show at maximum depth */
