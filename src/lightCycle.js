@@ -46,6 +46,7 @@
  * @property {number} snowBrightness — 0→1, dims snow at night
  * @property {number[]} snowTint — [r,g,b] per-channel multiplier for snow color (blue shift at night)
  * @property {number} ambientBrightness — 0→1, overall scene brightness
+ * @property {number[]} waterDeep — [r,g,b] water's own deep color (what reflection fades toward)
  */
 
 // --- Mood keyframes ---
@@ -69,6 +70,7 @@ const STOPS = [
     snowBright:    0.9,
     snowTint:      [0.90, 0.90, 0.95],  // Cool blue-white
     ambientBright: 0.85,
+    waterDeep:     [12, 22, 42],         // Dark blue-green, glacial — headroom for banding
   },
   { // 0.20 — Warm amber (low sun)
     phase: 0.20,
@@ -86,6 +88,7 @@ const STOPS = [
     snowBright:    1.0,
     snowTint:      [1.00, 0.98, 0.92],  // Slightly golden
     ambientBright: 1.0,
+    waterDeep:     [18, 24, 35],         // Warmer dark — headroom for banding
   },
   { // 0.38 — Deep violet (twilight)
     phase: 0.38,
@@ -103,6 +106,7 @@ const STOPS = [
     snowBright:    0.7,
     snowTint:      [0.75, 0.78, 0.90],  // Violet-shifted
     ambientBright: 0.7,
+    waterDeep:     [10, 16, 38],         // Purple-tinged deep
   },
   { // 0.55 — Near-black with cyan (deep night, aurora peak)
     // Night phase is the longest segment (0.38→0.55→0.78)
@@ -122,6 +126,7 @@ const STOPS = [
     snowBright:    0.5,
     snowTint:      [0.55, 0.60, 0.75],  // Blue-shifted, dim — moonlit snow
     ambientBright: 0.5,
+    waterDeep:     [4, 7, 16],           // Near-black, barely visible
   },
   { // 0.78 — Pale rose (dawn)
     phase: 0.78,
@@ -139,6 +144,7 @@ const STOPS = [
     snowBright:    0.8,
     snowTint:      [0.82, 0.80, 0.85],  // Faint rose warmth
     ambientBright: 0.75,
+    waterDeep:     [14, 18, 32],         // Cool pre-dawn
   },
 ];
 
@@ -260,6 +266,7 @@ const _mood = {
   snowBrightness: 0,
   snowTint: [0, 0, 0],
   ambientBrightness: 0,
+  waterDeep: [0, 0, 0],
 };
 
 /**
@@ -310,6 +317,7 @@ export function getMood(cycle) {
   _mood.waterFloorB = a.waterFloor[2] + (b.waterFloor[2] - a.waterFloor[2]) * t;
   _mood.snowBrightness = a.snowBright + (b.snowBright - a.snowBright) * t;
   lerpRGB(_mood.snowTint, a.snowTint, b.snowTint, t);
+  lerpRGB(_mood.waterDeep, a.waterDeep, b.waterDeep, t);
   _mood.ambientBrightness = a.ambientBright + (b.ambientBright - a.ambientBright) * t;
 
   // Glitch character: use the nearer stop's character (no interpolation for enums)
