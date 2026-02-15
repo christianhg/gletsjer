@@ -65,7 +65,7 @@ export const devAPI = {
     if (!rareEvents) return;
     // Reset edge-detection so re-forcing same event triggers callbacks
     if (id === 'calving') { calvingWasActive = false; if (calving) calving.wasActive = false; }
-    if (id === 'epicCalving') { epicCalvingWasActive = false; if (calving) calving.wasActive = false; }
+    if (id === 'epicCalving') { epicCalvingWasActive = false; shakeTriggered = false; if (calving) calving.wasActive = false; }
     if (id === 'shootingStar') shootingStarWasActive = false;
     if (id === 'whiteout') { whiteoutWasActive = false; whiteoutTaperStarted = false; }
     if (id === 'deepGlitch') deepGlitchWasActive = false;
@@ -86,6 +86,10 @@ let fogFrontX = -1;           // -1 = inactive, 0→1 = position across screen
 let fogFrontDir = 1;          // 1 = left-to-right, -1 = right-to-left
 let fogFrontIntensity = 0;    // 0→1, density behind the front
 let fogFrontLastEnd = 0;      // performance.now() timestamp, 3-min gap
+
+// --- Screen shake (epic calving impact) ---
+let shakeOffsetY = 0;       // current vertical offset in pixels
+let shakeTriggered = false;  // true once shake fires for current epic event
 
 // --- Convergence state ---
 let wasConverging = false;
@@ -284,6 +288,19 @@ export function drawScene(renderer, state) {
     epicCalvingWasActive = false;
   }
 
+  // Screen shake: detect main block entering splash phase (water impact)
+  if (epicCalvingEvent.active && !shakeTriggered) {
+    for (let i = 0; i < calving.cascadeCount; i++) {
+      const b = calving.cascade[i];
+      if (b.isMain && b.phase === 'splash') {
+        shakeOffsetY = (Math.random() < 0.5 ? -2 : 2);
+        shakeTriggered = true;
+        break;
+      }
+    }
+  }
+  if (!epicCalvingEvent.active) shakeTriggered = false;
+
   // Regular calving update (only when epic is not active — they share calving state)
   if (!epicCalvingEvent.active && !epicCalvingWasActive) {
     updateCalving(calving, calvingEvent, false, cameraDriftX);
@@ -362,6 +379,27 @@ export function drawScene(renderer, state) {
     const di = (dp.y * width + dp.x) * 4;
     data[di] = dp.r; data[di + 1] = dp.g; data[di + 2] = dp.b; data[di + 3] = 255;
   } else if (dp) { glitch.deadPixel = null; }
+
+  // Screen shake: exponential decay τ=0.3s, apply as vertical pixel shift
+  if (shakeOffsetY !== 0) {
+    const absY = Math.abs(shakeOffsetY);
+    if (absY < 0.1) {
+      shakeOffsetY = 0;
+    } else {
+      const shift = Math.round(shakeOffsetY);
+      if (shift !== 0) {
+        const rowBytes = width * 4;
+        if (shift > 0) {
+          // Shift down: copy rows from top to bottom
+          data.copyWithin(shift * rowBytes, 0, (height - shift) * rowBytes);
+        } else {
+          // Shift up: copy rows from bottom to top
+          data.copyWithin(0, -shift * rowBytes, height * rowBytes);
+        }
+      }
+      shakeOffsetY *= Math.exp(-state.dt / 0.3);
+    }
+  }
 
   renderer.putImageData();
 }

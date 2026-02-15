@@ -112,13 +112,13 @@ export function createCalving(width, height) {
   // Pre-allocate splash columns
   const splashColumns = [];
   for (let i = 0; i < MAX_SPLASH; i++) {
-    splashColumns.push({ active: false, x: 0, width: 0, intensity: 0, birth: 0 });
+    splashColumns.push({ active: false, x: 0, width: 0, intensity: 0, fallDist: 0, birth: 0 });
   }
 
   // Pre-allocate dust clouds
   const dustClouds = [];
   for (let i = 0; i < MAX_DUST; i++) {
-    dustClouds.push({ active: false, x: 0, y: 0, width: 0, intensity: 0, birth: 0 });
+    dustClouds.push({ active: false, x: 0, y: 0, width: 0, intensity: 0, isMain: false, birth: 0 });
   }
 
   return {
@@ -354,7 +354,7 @@ export function applyDust(calving, data, width, height, mood) {
     if (fogAdd < 0.005) continue;
 
     const halfW = (spread / 2) | 0;
-    const dustRows = 8;
+    const dustRows = dust.isMain ? 14 : 8;
     const fogR = mood.fogColor[0];
     const fogG = mood.fogColor[1];
     const fogB = mood.fogColor[2];
@@ -395,9 +395,9 @@ export function applySplash(calving, data, width, height) {
     const fade = 1.0 - (age / SPLASH_LIFETIME);
     const fadeEased = fade * fade; // Quadratic — fast initial, slow tail
 
-    const maxRows = Math.min(6, height - waterlineY);
+    const maxRows = Math.min(10, (6 + splash.fallDist / 10) | 0);
     for (let wy = 0; wy < maxRows; wy++) {
-      const rowFade = 1.0 - (wy / 6);
+      const rowFade = 1.0 - (wy / maxRows);
       const halfW = (splash.width / 2) | 0;
       for (let dx = -halfW; dx < halfW; dx++) {
         const px = (splash.x + dx) | 0;
@@ -553,6 +553,7 @@ function spawnSplash(calving, block) {
     splash.x = block.blockX + (block.blockW >> 1);
     splash.width = Math.min(block.blockW, 20);
     splash.intensity = block.blockW / 32;
+    splash.fallDist = block.fallDist;
     splash.birth = performance.now();
     return;
   }
@@ -567,6 +568,7 @@ function spawnDust(calving, block) {
     dust.y = block.blockY;
     dust.width = block.blockW;
     dust.intensity = 0.15;
+    dust.isMain = block.isMain;
     dust.birth = performance.now();
     return;
   }
