@@ -148,6 +148,119 @@ const STOPS = [
   },
 ];
 
+// --- Doomsday palette: collapsed warm range ---
+// Blue suppressed across all stops. The glacier can't get cold.
+const DOOMSDAY_STOPS = [
+  { // 0.00 — Warm baseline (was: cold blue)
+    phase: 0.00,
+    skyTop:        [22, 16, 20],
+    skyBottom:     [68, 52, 48],
+    shadowTint:    [6, 2, 0],
+    highlightTint: [14, 8, 2],
+    fogDensity:    0.65,
+    fogColor:      [48, 38, 32],
+    auroraVis:     0.0,
+    starVis:       0.0,
+    waterTint:     [0.28, 0.32, 0.52],
+    waterFloor:    [14, 12, 18],
+    glitch:        'mixed',
+    snowBright:    0.85,
+    snowTint:      [0.95, 0.92, 0.88],
+    ambientBright: 0.90,
+    waterDeep:     [16, 20, 30],
+  },
+  { // 0.20 — Warm amber (slightly hotter)
+    phase: 0.20,
+    skyTop:        [28, 20, 24],
+    skyBottom:     [85, 62, 45],
+    shadowTint:    [10, 4, -2],
+    highlightTint: [20, 14, 0],
+    fogDensity:    0.55,
+    fogColor:      [58, 44, 32],
+    auroraVis:     0.0,
+    starVis:       0.0,
+    waterTint:     [0.32, 0.34, 0.48],
+    waterFloor:    [16, 12, 14],
+    glitch:        'chromatic',
+    snowBright:    0.95,
+    snowTint:      [1.00, 0.96, 0.88],
+    ambientBright: 1.0,
+    waterDeep:     [20, 22, 28],
+  },
+  { // 0.38 — Dusky rose (was: deep violet)
+    phase: 0.38,
+    skyTop:        [18, 12, 16],
+    skyBottom:     [52, 35, 42],
+    shadowTint:    [8, 0, 4],
+    highlightTint: [12, 4, 6],
+    fogDensity:    0.70,
+    fogColor:      [42, 30, 35],
+    auroraVis:     0.10,
+    starVis:       0.25,
+    waterTint:     [0.24, 0.28, 0.50],
+    waterFloor:    [10, 8, 16],
+    glitch:        'mixed',
+    snowBright:    0.65,
+    snowTint:      [0.82, 0.78, 0.80],
+    ambientBright: 0.72,
+    waterDeep:     [14, 16, 28],
+  },
+  { // 0.55 — Warm night (was: near-black with cyan)
+    phase: 0.55,
+    skyTop:        [14, 8, 8],
+    skyBottom:     [32, 20, 18],
+    shadowTint:    [4, 0, 0],
+    highlightTint: [6, 2, 0],
+    fogDensity:    0.50,
+    fogColor:      [22, 16, 14],
+    auroraVis:     0.35,
+    starVis:       0.60,
+    waterTint:     [0.18, 0.22, 0.42],
+    waterFloor:    [8, 6, 10],
+    glitch:        'corruption',
+    snowBright:    0.50,
+    snowTint:      [0.65, 0.58, 0.55],
+    ambientBright: 0.55,
+    waterDeep:     [8, 8, 12],
+  },
+  { // 0.78 — Warm dawn (was: pale rose)
+    phase: 0.78,
+    skyTop:        [20, 14, 16],
+    skyBottom:     [65, 48, 42],
+    shadowTint:    [6, 2, 2],
+    highlightTint: [12, 6, 4],
+    fogDensity:    0.80,
+    fogColor:      [50, 38, 34],
+    auroraVis:     0.0,
+    starVis:       0.10,
+    waterTint:     [0.26, 0.30, 0.50],
+    waterFloor:    [12, 10, 14],
+    glitch:        'chromatic',
+    snowBright:    0.78,
+    snowTint:      [0.88, 0.82, 0.80],
+    ambientBright: 0.80,
+    waterDeep:     [16, 18, 24],
+  },
+];
+
+// --- Day tier: date-seeded daily personality ---
+
+/** @type {'common'|'mood'|'extreme'|'doomsday'} */
+let _dayTier = 'common';
+let _isDoomsday = false;
+
+function getDayTier() {
+  const tierRoll = dateHash(60);
+  if (tierRoll < 0.01) return 'doomsday';
+  if (tierRoll < 0.09) return 'extreme';
+  if (tierRoll < 0.29) return 'mood';
+  return 'common';
+}
+
+/** Read-only exports for scene.js */
+export function isDoomsday() { return _isDoomsday; }
+export function dayTier() { return _dayTier; }
+
 // Full cycle duration in seconds (~10 minutes)
 const CYCLE_DURATION = 600;
 
@@ -202,22 +315,44 @@ export function dateHash(fieldIndex) {
   return ((h >>> 0) % 10000) / 10000; // Normalize to [0, 1)
 }
 
+// Center-of-gravity pull for daily bias — OU centered on dayBias instead of zero
+// τ_revert ≈ 1000s ≈ 16min — gentle pull, doesn't kill volatility
+const BIAS_θ = 0.001;
+
 /**
  * Create the light cycle. Call once at init.
  * @returns {LightCycle}
  */
 export function createLightCycle() {
-  // Date-seeded init: same day = same starting conditions
+  // Determine day tier and set module-level flags
+  _dayTier = getDayTier();
+  _isDoomsday = _dayTier === 'doomsday';
+
   const d = PAL_DRIFT;
+  const ampScale = { common: 0.275, mood: 0.55, extreme: 0.75, doomsday: 1.0 }[_dayTier];
+
+  // Daily bias center: gravitational center the walk orbits
+  const dayBias = {
+    skyWarmth: _isDoomsday ? 0.85  : (dateHash(61) - 0.5) * 2 * ampScale * d.skyWarmth.max,
+    fog:       _isDoomsday ? 0.12  : (dateHash(62) - 0.5) * 2 * ampScale * d.fog.max,
+    aurora:    _isDoomsday ? -0.16 : (dateHash(63) - 0.5) * 2 * ampScale * d.aurora.max,
+    bright:    _isDoomsday ? 0.08  : (dateHash(64) - 0.5) * 2 * ampScale * d.bright.max,
+  };
+
+  // Speed bias: modifies base cycle speed (not OU drift)
+  const speedAmp = { common: 0.05, mood: 0.15, extreme: 0.25, doomsday: 1.0 }[_dayTier];
+  const speedBias = _isDoomsday ? -0.20 : (dateHash(65) - 0.5) * 2 * speedAmp;
+
   return {
-    phase: dateHash(0),                                    // Full 0-1 range
-    cycleSpeed: 1 / CYCLE_DURATION,
-    // Drift state: ±50% of clamp range, deterministic per day
-    speedDrift: 0,                                         // NOT seeded — OU finds its own rhythm
-    skyWarmth:  (dateHash(1) - 0.5) * d.skyWarmth.max,
-    fogMod:     (dateHash(2) - 0.5) * d.fog.max,
-    auroraMod:  (dateHash(3) - 0.5) * d.aurora.max,
-    brightMod:  (dateHash(4) - 0.5) * d.bright.max,
+    phase: dateHash(0),
+    cycleSpeed: (1 / CYCLE_DURATION) * (1 + speedBias),
+    speedDrift: 0,
+    // Init position = daily bias center (drift evolves from here)
+    skyWarmth:  dayBias.skyWarmth,
+    fogMod:     dayBias.fog,
+    auroraMod:  dayBias.aurora,
+    brightMod:  dayBias.bright,
+    dayBias,
     revolutionCount: 0,
   };
 }
@@ -235,14 +370,16 @@ export function updateLightCycle(cycle, dt) {
   cycle.phase = (cycle.phase + dt * effectiveSpeed) % 1;
   if (cycle.phase < prevPhase) cycle.revolutionCount++;
 
-  // Palette drift: random walk (θ=0), hard-clamped
+  // Palette drift: OU centered on daily bias (θ_bias pulls toward day's center)
   // After ~50min (5 revolutions), palette wanders 1.5× faster
   const palAccel = cycle.revolutionCount >= 5 ? 1.5 : 1.0;
   const d = PAL_DRIFT;
-  cycle.skyWarmth = clamp(ouStep(cycle.skyWarmth, dt, 0, d.skyWarmth.σ * palAccel), -d.skyWarmth.max, d.skyWarmth.max);
-  cycle.fogMod    = clamp(ouStep(cycle.fogMod,    dt, 0, d.fog.σ       * palAccel), -d.fog.max,       d.fog.max);
-  cycle.auroraMod = clamp(ouStep(cycle.auroraMod, dt, 0, d.aurora.σ    * palAccel), -d.aurora.max,    d.aurora.max);
-  cycle.brightMod = clamp(ouStep(cycle.brightMod, dt, 0, d.bright.σ    * palAccel), -d.bright.max,    d.bright.max);
+  const b = cycle.dayBias;
+  // OU with mean = dayBias: offset → step → re-offset
+  cycle.skyWarmth = clamp(ouStep(cycle.skyWarmth - b.skyWarmth, dt, BIAS_θ, d.skyWarmth.σ * palAccel) + b.skyWarmth, -d.skyWarmth.max, d.skyWarmth.max);
+  cycle.fogMod    = clamp(ouStep(cycle.fogMod    - b.fog,      dt, BIAS_θ, d.fog.σ       * palAccel) + b.fog,       -d.fog.max,       d.fog.max);
+  cycle.auroraMod = clamp(ouStep(cycle.auroraMod - b.aurora,   dt, BIAS_θ, d.aurora.σ    * palAccel) + b.aurora,    -d.aurora.max,    d.aurora.max);
+  cycle.brightMod = clamp(ouStep(cycle.brightMod - b.bright,   dt, BIAS_θ, d.bright.σ    * palAccel) + b.bright,    -d.bright.max,    d.bright.max);
 }
 
 // --- Pre-allocated mood object (reused every frame, zero GC) ---
@@ -278,21 +415,22 @@ const _mood = {
  */
 export function getMood(cycle) {
   const phase = cycle.phase;
+  const stops = _isDoomsday ? DOOMSDAY_STOPS : STOPS;
 
   // Find the two surrounding stops
-  let a = STOPS[STOPS.length - 1];
-  let b = STOPS[0];
+  let a = stops[stops.length - 1];
+  let b = stops[0];
   let t = 0;
 
-  for (let i = 0; i < STOPS.length; i++) {
-    const next = i + 1 < STOPS.length ? STOPS[i + 1] : STOPS[0];
-    const nextPhase = i + 1 < STOPS.length ? next.phase : 1.0;
+  for (let i = 0; i < stops.length; i++) {
+    const next = i + 1 < stops.length ? stops[i + 1] : stops[0];
+    const nextPhase = i + 1 < stops.length ? next.phase : 1.0;
 
-    if (phase >= STOPS[i].phase && phase < nextPhase) {
-      a = STOPS[i];
+    if (phase >= stops[i].phase && phase < nextPhase) {
+      a = stops[i];
       b = next;
-      const span = nextPhase - STOPS[i].phase;
-      t = span > 0 ? (phase - STOPS[i].phase) / span : 0;
+      const span = nextPhase - stops[i].phase;
+      t = span > 0 ? (phase - stops[i].phase) / span : 0;
       break;
     }
   }

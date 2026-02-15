@@ -28,7 +28,7 @@ export function createSnow(width, height) {
     particles[i] = spawnParticle(width, height, i < NORMAL_ACTIVE);
     particles[i].active = i < NORMAL_ACTIVE;
   }
-  return { particles, width, height, windMultiplier: 1.0, brightnessOverride: 0.0, tapering: false, residue: 0.0 };
+  return { particles, width, height, windMultiplier: 1.0, brightnessOverride: 0.0, tapering: false, residue: 0.0, draining: false };
 }
 
 function spawnParticle(width, height, randomY) {
@@ -122,6 +122,8 @@ export function updateAndRenderSnow(snow, data, time, dt, mood, cameraDriftDelta
     if (p.x >= width) p.x -= width;
 
     if (p.y >= height) {
+      // Doomsday drain: particles fall off and don't come back
+      if (snow.draining) { p.active = false; continue; }
       const activeLimit = NORMAL_ACTIVE + ((snow.residue * 40) | 0);
       if (snow.tapering && i >= activeLimit) { p.active = false; continue; }
       p.x = Math.random() * width;

@@ -15,7 +15,7 @@
  *   8. Vignette
  */
 
-import { createLightCycle, updateLightCycle, getMood, dateHash } from './lightCycle.js';
+import { createLightCycle, updateLightCycle, getMood, dateHash, isDoomsday, dayTier } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
 import { createAurora, renderAurora, renderLightShafts } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
@@ -83,6 +83,9 @@ let fogFrontDir = 1;          // 1 = left-to-right, -1 = right-to-left
 let fogFrontIntensity = 0;    // 0→1, density behind the front
 let fogFrontLastEnd = 0;      // performance.now() timestamp, 3-min gap
 
+// --- Convergence state ---
+let wasConverging = false;
+
 // Pre-allocated mood overlay (avoids mutating lightCycle singleton)
 const renderMood = {};
 const fogColorBuf = [0, 0, 0];
@@ -112,6 +115,18 @@ export function drawScene(renderer, state) {
     glitch = createGlitch(width, height);
     vignette = createVignette(width, height);
 
+    // Cache day personality for init block
+    const initDoomsday = isDoomsday();
+    const tier = dayTier();
+
+    // Doomsday: snow drains (particles fall off, don't respawn)
+    if (initDoomsday) snow.draining = true;
+
+    // Calving bias: doomsday 5-8×, extreme 2-4×, mood 1-2×, common 1×
+    const calvingMult = initDoomsday
+      ? 5 + dateHash(66) * 3
+      : { common: 1, mood: 1 + dateHash(66), extreme: 2 + dateHash(66) * 2 }[tier];
+
     rareEvents = createRareEvents();
     registerEvent(rareEvents, {
       id: 'shootingStar',
@@ -127,13 +142,13 @@ export function drawScene(renderer, state) {
     });
     registerEvent(rareEvents, {
       id: 'deepGlitch',
-      meanInterval: 90 * 60,
+      meanInterval: initDoomsday ? 45 * 60 : 90 * 60,
       canActivate: () => true,
       duration: () => 1 + Math.random() * 1,
     });
     registerEvent(rareEvents, {
       id: 'calving',
-      meanInterval: 20 * 60,
+      meanInterval: (20 * 60) / calvingMult,
       canActivate: () => true,
       duration: getCalvingDuration,
     });
@@ -189,6 +204,19 @@ export function drawScene(renderer, state) {
     }
   }
 
+  // Convergence detector: 3-of-4 independent systems crossing thresholds
+  // Doomsday thresholds are relaxed — suppressed systems briefly fighting back
+  const doomsday = isDoomsday();
+  const convergenceCount =
+    (mood.auroraVisibility > (doomsday ? 0.28 : 0.75) ? 1 : 0) +
+    (mood.fogDensity < (doomsday ? 0.52 : 0.25) ? 1 : 0) +
+    (Math.abs(lightCycle.skyWarmth) > 0.65 ? 1 : 0) +
+    (Math.max(0.5, 1 + lightCycle.speedDrift) < 0.85 ? 1 : 0);
+  const isConverging = convergenceCount >= 3;
+  // Falling edge: post-convergence fog residue
+  if (!isConverging && wasConverging) fogResidueBoost += 0.08;
+  wasConverging = isConverging;
+
   // Build renderMood: copy mood + augment fog fields (zero-alloc)
   Object.assign(renderMood, mood);
   renderMood.fogDensity = Math.min(mood.fogDensity + fogResidueBoost, 1.0);
@@ -200,6 +228,11 @@ export function drawScene(renderer, state) {
   renderMood.fogFrontX = fogFrontX;
   renderMood.fogFrontDir = fogFrontDir;
   renderMood.fogFrontIntensity = fogFrontIntensity;
+
+  // Doomsday convergence: fog clears to expose the full scarred face
+  if (doomsday && isConverging) {
+    renderMood.fogDensity = Math.min(renderMood.fogDensity, 0.15);
+  }
 
   // 0b. Audio: update parameters from mood (dt for thermal inertia)
   if (isAudioActive()) updateAudio(mood, state.dt, fogFrontX);
@@ -259,7 +292,7 @@ export function drawScene(renderer, state) {
   const dgState = getEventState(rareEvents, 'deepGlitch');
   if (dgState.active && dgState.progress > 0.1 && dgState.progress < 0.15) {
     invertFrame(data, width, height);
-    applyDataBleed(data, width, height, glitch.seed, glitch);
+    applyDataBleed(data, width, height, glitch.seed, glitch, isDoomsday());
   }
 
   // 8. Vignette
