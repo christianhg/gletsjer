@@ -19,7 +19,7 @@
 
 import { createLightCycle, updateLightCycle, getMood, dateHash, isDoomsday, dayTier } from './lightCycle.js';
 import { seed } from './noise.js';
-import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
+import { generateGlacier, renderGlacierSky, renderGlacierTerrain, toggleDithering, isDitheringEnabled } from './glacier.js';
 import { createAurora, renderAurora, renderLightShafts } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
 import { createRareEvents, registerEvent, updateRareEvents, getEventState, forceEvent } from './rareEvents.js';
@@ -75,6 +75,8 @@ export const devAPI = {
   },
   frozen: false,
   speedMultiplier: 1,
+  toggleDithering: () => toggleDithering(),
+  isDitheringEnabled: () => isDitheringEnabled(),
 };
 
 // --- Residue state ---
