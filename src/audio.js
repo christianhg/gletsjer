@@ -150,6 +150,133 @@ export function triggerCalvingSound() {
   w.start(t + 0.2); w.stop(t + 2.0);
 }
 
+/**
+ * Epic calving audio — called once at event start (rising edge).
+ * Schedules all per-block sounds + ice groan + feedback delay reverb
+ * using Web Audio timing. No per-frame cost.
+ *
+ * @param {Array<{startDelay: number, blockW: number, isMain: boolean}>} blocks
+ */
+export function triggerEpicCalvingSound(blocks) {
+  if (!isAudioActive()) return;
+  const t = ctx.currentTime;
+  const v = reduced ? 0.3 : 0.6;
+
+  // --- Feedback delay reverb (shared by groan + main thump) ---
+  // Single delay: one wall, one reflection, one direction
+  // 200ms ≈ 70m fjord wall round trip
+  const delay = ctx.createDelay(0.3);
+  delay.delayTime.setValueAtTime(0.2, t);
+  const feedback = gain(0.55);
+  const tailLpf = bpf('lowpass', 600, 1.0);
+  delay.connect(tailLpf);
+  tailLpf.connect(feedback);
+  feedback.connect(delay);
+  delay.connect(eventBus);
+  // Kill feedback after 5s
+  feedback.gain.setValueAtTime(0.55, t + 3);
+  feedback.gain.exponentialRampToValueAtTime(0.001, t + 5);
+
+  // Find main block start time for groan scheduling
+  let mainStartTime = t + 1.2; // fallback
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].isMain) { mainStartTime = t + blocks[i].startDelay; break; }
+  }
+
+  // --- Ice groan: anticipation, starts 200ms before main crack ---
+  // 100Hz sine + 2.5Hz vibrato (±5Hz). Barely audible — you feel it.
+  const groan = osc('sine', 100);
+  const groanVib = osc('sine', 2.5);
+  const groanVibGain = gain(5);
+  groanVib.connect(groanVibGain);
+  groanVibGain.connect(groan.frequency);
+  const groanGain = gain(0);
+  const groanStart = mainStartTime - 0.2;
+  groanGain.gain.setValueAtTime(0, groanStart);
+  groanGain.gain.linearRampToValueAtTime(v * 0.15, mainStartTime);
+  groanGain.gain.setValueAtTime(v * 0.15, mainStartTime + 1.5);
+  groanGain.gain.exponentialRampToValueAtTime(0.001, mainStartTime + 2.5);
+  groan.connect(groanGain);
+  groanGain.connect(eventBus);
+  groanGain.connect(delay); // Groan through reverb
+  groan.start(groanStart);
+  groan.stop(mainStartTime + 2.5);
+  groanVib.start(groanStart);
+  groanVib.stop(mainStartTime + 2.5);
+
+  // --- Per-block sound triggers ---
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const bt = t + block.startDelay;
+
+    if (block.isMain) {
+      // Main block: deep crack, heavy thump, long wash
+      const n = noiseSrc(); const f = bpf('lowpass', 2500, 4);
+      f.frequency.setValueAtTime(2500, bt);
+      f.frequency.exponentialRampToValueAtTime(50, bt + 1.2);
+      const g = gain(v * 1.0); g.gain.exponentialRampToValueAtTime(0.001, bt + 2.0);
+      n.connect(f); f.connect(g); g.connect(eventBus);
+      n.start(bt); n.stop(bt + 2.0);
+
+      // Main thump: 40→18Hz, through reverb
+      const o = osc('sine', 40);
+      o.frequency.setValueAtTime(40, bt);
+      o.frequency.exponentialRampToValueAtTime(22, bt + 0.3);
+      o.frequency.setValueAtTime(22, bt + 0.3);
+      o.frequency.exponentialRampToValueAtTime(18, bt + 1.0);
+      const tg = gain(v * 0.8); tg.gain.exponentialRampToValueAtTime(0.001, bt + 1.5);
+      o.connect(tg); tg.connect(eventBus);
+      tg.connect(delay); // Thump through reverb
+      o.start(bt); o.stop(bt + 1.5);
+
+      // Main wash: longer tail
+      const w = noiseSrc(); const wf = bpf('lowpass', 120, 1.5);
+      const wg = gain(0);
+      wg.gain.setValueAtTime(0, bt + 0.3);
+      wg.gain.linearRampToValueAtTime(v * 0.4, bt + 0.7);
+      wg.gain.exponentialRampToValueAtTime(0.001, bt + 2.5);
+      w.connect(wf); wf.connect(wg); wg.connect(eventBus);
+      w.start(bt + 0.3); w.stop(bt + 2.5);
+
+    } else {
+      // Lead (8-14px) or fragment (6-10px): scaled by block width
+      const isSmall = block.blockW < 8;
+      const crackFreq = isSmall ? 1500 : 2500;
+      const crackEnd = isSmall ? 150 : 120;
+      const crackDur = isSmall ? 0.8 : 1.0;
+      const gainScale = isSmall ? 0.3 : 0.6;
+
+      const n = noiseSrc(); const f = bpf('lowpass', crackFreq, 3);
+      f.frequency.setValueAtTime(crackFreq, bt);
+      f.frequency.exponentialRampToValueAtTime(crackEnd, bt + crackDur);
+      const g = gain(v * gainScale); g.gain.exponentialRampToValueAtTime(0.001, bt + crackDur + 0.5);
+      n.connect(f); f.connect(g); g.connect(eventBus);
+      n.start(bt); n.stop(bt + crackDur + 0.5);
+
+      // Thump: scaled
+      const thumpFreq = isSmall ? 50 : 55;
+      const thumpEnd = isSmall ? 35 : 30;
+      const thumpDur = isSmall ? 0.4 : 0.6;
+      const o = osc('sine', thumpFreq);
+      o.frequency.exponentialRampToValueAtTime(thumpEnd, bt + thumpDur);
+      const tg = gain(v * (gainScale * 0.7));
+      tg.gain.exponentialRampToValueAtTime(0.001, bt + thumpDur + 0.2);
+      o.connect(tg); tg.connect(eventBus);
+      o.start(bt); o.stop(bt + thumpDur + 0.2);
+
+      // Wash: scaled
+      const washDur = isSmall ? 1.0 : 1.5;
+      const w = noiseSrc(); const wf = bpf('lowpass', isSmall ? 180 : 150, 1.5);
+      const wg = gain(0);
+      wg.gain.setValueAtTime(0, bt + 0.2);
+      wg.gain.linearRampToValueAtTime(v * (gainScale * 0.5), bt + 0.4);
+      wg.gain.exponentialRampToValueAtTime(0.001, bt + washDur);
+      w.connect(wf); wf.connect(wg); wg.connect(eventBus);
+      w.start(bt + 0.2); w.stop(bt + washDur);
+    }
+  }
+}
+
 export function triggerShootingStarSound() {
   if (!isAudioActive()) return;
   const t = ctx.currentTime, v = reduced ? 0.03 : 0.06;

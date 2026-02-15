@@ -8,8 +8,10 @@
  *   2. Aurora (sky zone + per-column ice light)
  *   3. Stars + shooting star (terrain occludes)
  *   4. Glacier layers (fog + aurora ice lighting + snow caps)
- *   4b. Ice calving (localized block displacement)
+ *   4b. Ice calving + scars (regular or epic sub-blocks)
+ *   4c. Dust clouds (epic only, fog-colored overlay)
  *   5. Water (mood-tinted, calving ripple boost)
+ *   5b. Splash columns (epic only, after water)
  *   6. Snow (whiteout-capable, blue-shifted)
  *   7. Glitch (deep glitch override + color inversion)
  *   8. Vignette
@@ -21,13 +23,14 @@ import { createAurora, renderAurora, renderLightShafts } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
 import { createRareEvents, registerEvent, updateRareEvents, getEventState, forceEvent } from './rareEvents.js';
 import { initShootingStar, renderShootingStar } from './shootingStar.js';
-import { createCalving, updateCalving, applyCalving, applyScars, getCalvingDuration } from './calving.js';
+import { createCalving, updateCalving, applyCalving, applyScars, applyDust, applySplash,
+         getCalvingDuration, getEpicCalvingDuration } from './calving.js';
 import { renderWater } from './water.js';
 import { createSnow, updateAndRenderSnow, activateWhiteout, beginWhiteoutTaper } from './snow.js';
 import { createGlitch, updateGlitch, applyGlitch, applyDataBleed } from './glitch.js';
 import { createVignette, applyVignette } from './vignette.js';
 import { updateAudio, isAudioActive, getAudioElapsed,
-         triggerCalvingSound, triggerShootingStarSound,
+         triggerCalvingSound, triggerEpicCalvingSound, triggerShootingStarSound,
          triggerWhiteoutSound, taperWhiteoutSound, triggerDeepGlitchSound,
          triggerStillness, endStillness } from './audio.js';
 
@@ -62,6 +65,7 @@ export const devAPI = {
     if (!rareEvents) return;
     // Reset edge-detection so re-forcing same event triggers callbacks
     if (id === 'calving') { calvingWasActive = false; if (calving) calving.wasActive = false; }
+    if (id === 'epicCalving') { epicCalvingWasActive = false; if (calving) calving.wasActive = false; }
     if (id === 'shootingStar') shootingStarWasActive = false;
     if (id === 'whiteout') { whiteoutWasActive = false; whiteoutTaperStarted = false; }
     if (id === 'deepGlitch') deepGlitchWasActive = false;
@@ -96,6 +100,7 @@ let whiteoutWasActive = false;
 let whiteoutTaperStarted = false;
 let deepGlitchWasActive = false;
 let calvingWasActive = false;
+let epicCalvingWasActive = false;
 let stillnessWasActive = false;
 
 /**
@@ -151,6 +156,12 @@ export function drawScene(renderer, state) {
       meanInterval: (20 * 60) / calvingMult,
       canActivate: () => true,
       duration: getCalvingDuration,
+    });
+    registerEvent(rareEvents, {
+      id: 'epicCalving',
+      meanInterval: 60 * 60,  // 60min — no doomsday bias
+      canActivate: () => true,
+      duration: getEpicCalvingDuration,
     });
     registerEvent(rareEvents, {
       id: 'stillness',
@@ -243,11 +254,40 @@ export function drawScene(renderer, state) {
   handleWhiteout();
   handleDeepGlitch();
 
+  // Regular calving
   const calvingEvent = getEventState(rareEvents, 'calving');
   if (calvingEvent.active && !calvingWasActive && isAudioActive()) triggerCalvingSound();
-  if (!calvingEvent.active && calvingWasActive) fogResidueBoost = 0.15; // Calving fog surge
+  if (!calvingEvent.active && calvingWasActive) fogResidueBoost = 0.15;
   calvingWasActive = calvingEvent.active;
-  updateCalving(calving, calvingEvent, cameraDriftX);
+
+  // Epic calving — shares calving state with regular, so only one runs per frame
+  const epicCalvingEvent = getEventState(rareEvents, 'epicCalving');
+  if (epicCalvingEvent.active && !epicCalvingWasActive) {
+    // Rising edge: update calving first to pick blocks, then trigger audio with block data
+    updateCalving(calving, epicCalvingEvent, true, cameraDriftX);
+    if (isAudioActive()) {
+      const blocks = [];
+      for (let i = 0; i < calving.cascadeCount; i++) {
+        const b = calving.cascade[i];
+        blocks.push({ startDelay: b.startDelay, blockW: b.blockW, isMain: b.isMain });
+      }
+      triggerEpicCalvingSound(blocks);
+    }
+    epicCalvingWasActive = true;
+  } else if (epicCalvingEvent.active) {
+    // Sustain: update cascade sub-blocks
+    updateCalving(calving, epicCalvingEvent, true, cameraDriftX);
+  } else if (epicCalvingWasActive) {
+    // Falling edge: let updateCalving handle scar snapshots, then reset
+    updateCalving(calving, epicCalvingEvent, true, cameraDriftX);
+    fogResidueBoost = 0.25; // Bigger fog surge than regular calving
+    epicCalvingWasActive = false;
+  }
+
+  // Regular calving update (only when epic is not active — they share calving state)
+  if (!epicCalvingEvent.active && !epicCalvingWasActive) {
+    updateCalving(calving, calvingEvent, false, cameraDriftX);
+  }
 
   // Stillness: the glacier holds its breath. No visual signature.
   const stillnessEvent = getEventState(rareEvents, 'stillness');
@@ -276,11 +316,17 @@ export function drawScene(renderer, state) {
   renderGlacierTerrain(glacier, data, state.time, renderMood, aurora, cameraDriftX);
 
   // 4b. Ice calving + scars
-  applyCalving(calving, data, width, height, calvingEvent);
+  applyCalving(calving, data, width, height);
   applyScars(calving, data, width, height, cameraDriftX);
+
+  // 4c. Dust clouds (epic only, fog-colored overlay)
+  applyDust(calving, data, width, height, renderMood);
 
   // 5. Water (with calving ripple boost, aurora light)
   renderWater(data, width, height, state.time, renderMood, calving.rippleBoost, aurora);
+
+  // 5b. Splash columns (epic only, after water, before snow)
+  applySplash(calving, data, width, height);
 
   // 6. Snow (whiteout-capable, blue-shifted, counter-drift)
   updateAndRenderSnow(snow, data, state.time, state.dt, renderMood, cameraDriftDelta);
@@ -395,7 +441,7 @@ function seedStartingState(width, height) {
     const age = 30 + dateHash(base + 4) * 210; // 30-240s ago
     calving.scars[i] = { blockX, blockY, blockW, blockH, worldX: blockX, jaggedOffset: jagged, birth: performance.now() - age * 1000 };
   }
-  calving.scarIdx = scarCount % 4;
+  calving.scarIdx = scarCount % 8;
 
   // 2. Fog front: ~30% chance of mid-crossing
   if (dateHash(30) < 0.3) {
