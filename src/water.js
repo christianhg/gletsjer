@@ -2,7 +2,7 @@
  * Water Reflection — fjord water as a body of water, not a mirror
  *
  * Two blended systems:
- *   1. Reflection — existing mirror logic, attenuated by power curve (1-d)^1.5
+ *   1. Reflection — mirror logic, attenuated by power curve max(0, 1-(2d)^1.8)
  *   2. Own-color — waterDeep mood field, rises as reflection fades
  *
  * The "deep zone" emerges naturally from the power curve — reflection drops
