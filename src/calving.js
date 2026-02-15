@@ -123,15 +123,17 @@ export function getCalvingDuration() {
  *
  * @param {CalvingSystem} calving
  * @param {{ active: boolean, elapsed: number, progress: number }} eventState
+ * @param {number} [cameraDriftX] — global camera drift offset (pixels)
  */
-export function updateCalving(calving, eventState) {
+export function updateCalving(calving, eventState, cameraDriftX) {
   const { active, progress } = eventState;
+  const drift = cameraDriftX || 0;
 
   // Rising edge: event just activated — pick a new block
   if (active && !calving.wasActive) {
     pickCalvingBlock(calving);
   }
-  // Falling edge: event just ended — snapshot scar
+  // Falling edge: event just ended — snapshot scar in world-space
   if (!active && calving.wasActive) {
     const idx = calving.scarIdx;
     const jagged = calving.scarJagged[idx];
@@ -139,6 +141,7 @@ export function updateCalving(calving, eventState) {
     calving.scars[idx] = {
       blockX: calving.blockX, blockY: calving.blockY,
       blockW: calving.blockW, blockH: calving.blockH,
+      worldX: calving.blockX + drift,  // Store world-space X for camera drift
       jaggedOffset: jagged, birth: performance.now(),
     };
     calving.scarIdx = (idx + 1) % 4;
@@ -225,15 +228,18 @@ export function applyCalving(calving, data, width, height, eventState) {
 
 /**
  * Apply calving scars — faint darkened patches from past calving events.
+ * Scars store world-space X, converted to screen-space using cameraDriftX.
  * Call AFTER applyCalving, BEFORE water.
  *
  * @param {CalvingSystem} calving
  * @param {Uint8ClampedArray} data
  * @param {number} width
  * @param {number} height
+ * @param {number} [cameraDriftX] — global camera drift offset (pixels)
  */
-export function applyScars(calving, data, width, height) {
+export function applyScars(calving, data, width, height, cameraDriftX) {
   const now = performance.now();
+  const drift = cameraDriftX || 0;
   for (let s = 0; s < 4; s++) {
     const scar = calving.scars[s];
     if (!scar) continue;
@@ -241,10 +247,14 @@ export function applyScars(calving, data, width, height) {
     const opacity = Math.exp(-age / 300); // τ = 300s = 5min
     if (opacity < 0.01) { calving.scars[s] = null; continue; }
     const darken = 1 - opacity * 0.18; // 18% darkening at full opacity
+    // Convert world-space X to screen-space (scars drift with terrain)
+    const scarScreenX = scar.worldX !== undefined
+      ? ((scar.worldX - drift) | 0)
+      : scar.blockX;
     for (let dy = 0; dy < scar.blockH; dy++) {
       for (let dx = 0; dx < scar.blockW; dx++) {
         const py = scar.blockY + scar.jaggedOffset[dx] + dy;
-        const px = scar.blockX + dx;
+        const px = scarScreenX + dx;
         if (px < 0 || px >= width || py < 0 || py >= height) continue;
         const i = (py * width + px) * 4;
         data[i]     = (data[i] * darken) | 0;

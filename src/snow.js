@@ -72,8 +72,9 @@ export function beginWhiteoutTaper(snow) {
  * @param {number} time
  * @param {number} dt
  * @param {import('./lightCycle.js').Mood} [mood]
+ * @param {number} [cameraDriftDelta] — per-frame camera drift (pixels)
  */
-export function updateAndRenderSnow(snow, data, time, dt, mood) {
+export function updateAndRenderSnow(snow, data, time, dt, mood, cameraDriftDelta) {
   const { particles, width, height, brightnessOverride } = snow;
   const wind = Math.sin(time * 0.07) * 0.5 * snow.windMultiplier;
 
@@ -114,6 +115,8 @@ export function updateAndRenderSnow(snow, data, time, dt, mood) {
 
     p.y += p.fallSpeed * dt;
     p.x += (Math.sin(time * p.driftFreq + p.phase) * p.driftAmp + wind) * dt * 3;
+    // Subtle counter-drift: snow appears to drift opposite to camera movement
+    if (cameraDriftDelta) p.x -= cameraDriftDelta * 0.02;
 
     if (p.x < 0) p.x += width;
     if (p.x >= width) p.x -= width;

@@ -3,11 +3,14 @@
  *
  * Architecture:
  *   - Terrain profiles are pre-computed once as height arrays (generateGlacier)
+ *   - Heightmaps are 3× display width (960px) for camera drift headroom
+ *   - 32px smoothstep crossfade at wrap point for seamless tiling
  *   - Each frame, layers render back-to-front with animated effects
  *   - Colors are mood-dependent: lightCycle.js provides tints, fog, aurora light
  *   - Crevasses use ridge noise, pre-computed per layer
  *   - Shimmer uses 3D noise (time as Z) for organic sparkle
  *   - All frequencies are incommensurate — nothing syncs up
+ *   - Far layers (fogBase > 0.30) get 1px horizontal DoF blur after rendering
  */
 
 import { fbm, ridge, simplex2, simplex3 } from './noise.js';
@@ -16,6 +19,47 @@ import * as palette from './palette.js';
 // --- Layer definitions (back to front) ---
 
 const LAYER_DEFS = [
+  // --- NEW far-field layers (behind existing stack) ---
+  // Far mountains — silhouette in fog, barely visible
+  {
+    colorDark: palette.SKY_MID,
+    colorLight: palette.ICE_SHADOW,
+    depth: 0.0,
+    noiseScale: 0.005,
+    baseHeight: 0.15,
+    amplitude: 0.10,
+    octaves: 2,
+    driftSpeed: 0.001,
+    shimmerAmount: 0.1,
+    fogBase: 0.75,
+  },
+  // Distant ridge — faint shape emerging from haze
+  {
+    colorDark: palette.SKY_MID,
+    colorLight: palette.ICE_SHADOW,
+    depth: 0.08,
+    noiseScale: 0.007,
+    baseHeight: 0.18,
+    amplitude: 0.10,
+    octaves: 2,
+    driftSpeed: 0.0015,
+    shimmerAmount: 0.15,
+    fogBase: 0.60,
+  },
+  // Mid-far ice mass — bridge into existing stack
+  {
+    colorDark: palette.ICE_SHADOW,
+    colorLight: palette.ICE_DEEP,
+    depth: 0.15,
+    noiseScale: 0.010,
+    baseHeight: 0.22,
+    amplitude: 0.10,
+    octaves: 3,
+    driftSpeed: 0.002,
+    shimmerAmount: 0.25,
+    fogBase: 0.45,
+  },
+  // --- Existing layers (unchanged) ---
   // Far background mountains — subtle, muted
   {
     colorDark: palette.SKY_MID,
@@ -27,7 +71,7 @@ const LAYER_DEFS = [
     octaves: 3,
     driftSpeed: 0.003,
     shimmerAmount: 0.2,
-    fogBase: 0.35,       // Heavy fog — almost silhouette
+    fogBase: 0.35,
   },
   // Mid-background ice mass
   {
@@ -83,6 +127,17 @@ const LAYER_DEFS = [
   },
 ];
 
+// --- Terrain generation constants ---
+
+/** Terrain width multiplier — 3× display width for camera drift headroom */
+const TERRAIN_WIDTH_MULT = 3;
+
+/** Crossfade zone at terrain wrap point (pixels) */
+const BLEND_ZONE = 32;
+
+/** DoF blur threshold — layers with fogBase above this get blurred */
+const DOF_FOG_THRESHOLD = 0.30;
+
 /**
  * @typedef {Object} GlacierLayer
  * @property {Float32Array} heights
@@ -98,22 +153,26 @@ const LAYER_DEFS = [
 /**
  * @typedef {Object} Glacier
  * @property {GlacierLayer[]} layers
- * @property {number} width
- * @property {number} height
+ * @property {number} width — display width (320)
+ * @property {number} height — display height (180)
  */
 
 /**
  * Generate the glacier terrain. Call once at init.
- * @param {number} width
- * @param {number} height
+ * Heightmaps are generated at 3× display width with crossfade at wrap point.
+ *
+ * @param {number} width — display width
+ * @param {number} height — display height
  * @returns {Glacier}
  */
 export function generateGlacier(width, height) {
-  const layers = LAYER_DEFS.map((def, li) => {
-    const heights = new Float32Array(width);
-    const crevasses = new Float32Array(width);
+  const terrainWidth = width * TERRAIN_WIDTH_MULT;
 
-    for (let x = 0; x < width; x++) {
+  const layers = LAYER_DEFS.map((def, li) => {
+    const heights = new Float32Array(terrainWidth);
+    const crevasses = new Float32Array(terrainWidth);
+
+    for (let x = 0; x < terrainWidth; x++) {
       const nx = x * def.noiseScale;
       const terrainNoise = fbm(nx, def.depth * 10 + li * 7.3, def.octaves);
       heights[x] = def.baseHeight + terrainNoise * def.amplitude;
@@ -124,6 +183,15 @@ export function generateGlacier(width, height) {
         3
       );
       crevasses[x] = crevasseNoise;
+    }
+
+    // 32px smoothstep crossfade at wrap point for seamless tiling
+    for (let i = 0; i < BLEND_ZONE; i++) {
+      const t = i / BLEND_ZONE;
+      const smooth = t * t * (3 - 2 * t); // smoothstep
+      const wrapX = terrainWidth - BLEND_ZONE + i;
+      heights[wrapX] = heights[wrapX] * (1 - smooth) + heights[i] * smooth;
+      crevasses[wrapX] = crevasses[wrapX] * (1 - smooth) + crevasses[i] * smooth;
     }
 
     return {
@@ -161,15 +229,21 @@ export function renderGlacierSky(glacier, data, time, mood) {
  * @param {number} time
  * @param {import('./lightCycle.js').Mood} mood
  * @param {import('./aurora.js').Aurora} aurora
+ * @param {number} cameraDriftX — global camera drift offset (pixels)
  */
-export function renderGlacierTerrain(glacier, data, time, mood, aurora) {
+export function renderGlacierTerrain(glacier, data, time, mood, aurora, cameraDriftX) {
   const { layers, width, height } = glacier;
 
   for (let li = 0; li < layers.length; li++) {
-    renderLayer(layers[li], data, width, height, time, li, mood, aurora);
+    renderLayer(layers[li], data, width, height, time, li, mood, aurora, cameraDriftX);
+
+    // DoF blur: 1px horizontal box blur on far layers (fogBase > 0.30)
+    if (layers[li].fogBase > DOF_FOG_THRESHOLD) {
+      blurLayer(layers[li], data, width, height, time, cameraDriftX);
+    }
   }
 
-  renderSnowCaps(layers, data, width, height, time, mood);
+  renderSnowCaps(layers, data, width, height, time, mood, cameraDriftX);
 }
 
 // --- Sky ---
@@ -203,8 +277,9 @@ function renderSky(data, width, height, time, mood) {
 
 // --- Layer rendering ---
 
-function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora) {
+function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora, cameraDriftX) {
   const { heights, crevasses, colorDark, colorLight, depth, driftSpeed, shimmerAmount, fogBase } = layer;
+  const terrainLen = heights.length;
 
   // Mood tints
   const shadowR = mood.shadowTint[0];
@@ -229,9 +304,10 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
   // Shimmer modulation: ambient light cycle + aurora memory
   const shimmerMod = (0.2 + ambient * 0.8) * (mood.shimmerBoost || 1.0);
 
-  // Animated drift offset
+  // Animated drift offset — layer's own drift + camera drift (depth-scaled)
   const drift = time * driftSpeed;
-  const parallaxOffset = (drift * 8) | 0;
+  const cameraPx = (cameraDriftX * (0.1 + depth * 0.9)) | 0;
+  const parallaxOffset = ((drift * 8 + cameraPx) | 0);
 
   // Texture noise drift
   const texDriftX = drift * 3.0
@@ -241,7 +317,7 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
     + Math.sin(time * 0.00011) * 0.5;
 
   for (let x = 0; x < width; x++) {
-    const srcX = ((x + parallaxOffset) % width + width) % width;
+    const srcX = ((x + parallaxOffset) % terrainLen + terrainLen) % terrainLen;
     const terrainY = (heights[srcX] * height) | 0;
     if (terrainY >= height) continue;
 
@@ -367,9 +443,64 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora)
   }
 }
 
+// --- DoF blur ---
+
+// Pre-allocated scanline buffer for blur (320 * 3 RGB = 960 bytes)
+// Reused every frame — zero GC
+// NOTE: assumes 320px display width — resize if renderer width changes
+const blurBuf = new Uint8Array(320 * 3);
+
+/**
+ * 1px horizontal box blur [0.25, 0.5, 0.25] on pixels belonging to a layer.
+ * Uses scanline buffer to prevent left-to-right cascade.
+ * Only blurs rows where the layer has terrain (terrainY to height).
+ */
+function blurLayer(layer, data, width, height, time, cameraDriftX) {
+  const { heights, depth, driftSpeed } = layer;
+  const terrainLen = heights.length;
+
+  // Recompute parallax offset (same formula as renderLayer)
+  const drift = time * driftSpeed;
+  const cameraPx = (cameraDriftX * (0.1 + depth * 0.9)) | 0;
+  const parallaxOffset = ((drift * 8 + cameraPx) | 0);
+
+  // Find min terrainY across all columns for this layer (blur from there down)
+  let minTerrainY = height;
+  for (let x = 0; x < width; x++) {
+    const srcX = ((x + parallaxOffset) % terrainLen + terrainLen) % terrainLen;
+    const ty = (heights[srcX] * height) | 0;
+    if (ty < minTerrainY) minTerrainY = ty;
+  }
+  if (minTerrainY >= height) return;
+
+  // Blur each row from minTerrainY to height
+  for (let y = minTerrainY; y < height; y++) {
+    const rowBase = y * width * 4;
+
+    // Copy row RGB into buffer
+    for (let x = 0; x < width; x++) {
+      const si = rowBase + x * 4;
+      const bi = x * 3;
+      blurBuf[bi]     = data[si];
+      blurBuf[bi + 1] = data[si + 1];
+      blurBuf[bi + 2] = data[si + 2];
+    }
+
+    // Write blurred values: [0.25, 0.5, 0.25] weighted average
+    // Skip first and last pixel (edge pixels stay sharp)
+    for (let x = 1; x < width - 1; x++) {
+      const si = rowBase + x * 4;
+      const bi = x * 3;
+      data[si]     = (blurBuf[bi - 3] + (blurBuf[bi]     << 1) + blurBuf[bi + 3]) >> 2;
+      data[si + 1] = (blurBuf[bi - 2] + (blurBuf[bi + 1] << 1) + blurBuf[bi + 4]) >> 2;
+      data[si + 2] = (blurBuf[bi - 1] + (blurBuf[bi + 2] << 1) + blurBuf[bi + 5]) >> 2;
+    }
+  }
+}
+
 // --- Snow caps ---
 
-function renderSnowCaps(layers, data, width, height, time, mood) {
+function renderSnowCaps(layers, data, width, height, time, mood, cameraDriftX) {
   const snowBright = mood.snowBrightness;
 
   // Mood-tinted snow colors
@@ -380,23 +511,32 @@ function renderSnowCaps(layers, data, width, height, time, mood) {
   const frostG = palette.FROST[1] * snowBright;
   const frostB = palette.FROST[2] * snowBright;
 
-  for (let li = 0; li < Math.min(3, layers.length); li++) {
+  let snowLayerCount = 0;
+  for (let li = 0; li < layers.length; li++) {
     const layer = layers[li];
-    const maxThickness = li === 0 ? 4 : li === 1 ? 3 : 2;
+    // Skip far layers where snow is invisible under fog
+    if (layer.fogBase > DOF_FOG_THRESHOLD) continue;
+
+    // First 3 visible layers get snow caps: 4px, 3px, 2px thickness
+    if (snowLayerCount >= 3) break;
+    const maxThickness = 4 - snowLayerCount;
+    snowLayerCount++;
 
     const drift = time * layer.driftSpeed;
-    const parallaxOffset = (drift * 8) | 0;
+    const terrainLen = layer.heights.length;
+    const cameraPx = (cameraDriftX * (0.1 + layer.depth * 0.9)) | 0;
+    const parallaxOffset = ((drift * 8 + cameraPx) | 0);
 
     for (let x = 0; x < width; x++) {
-      const srcX = ((x + parallaxOffset) % width + width) % width;
+      const srcX = ((x + parallaxOffset) % terrainLen + terrainLen) % terrainLen;
       const terrainY = (layer.heights[srcX] * height) | 0;
 
       const snowNoise = simplex2(srcX * 0.05 + li * 23, li * 11 + 0.5);
       if (snowNoise < 0.0) continue;
 
       const h = layer.heights[srcX];
-      const prevSrcX = ((srcX - 1) % width + width) % width;
-      const nextSrcX = ((srcX + 1) % width + width) % width;
+      const prevSrcX = ((srcX - 1) % terrainLen + terrainLen) % terrainLen;
+      const nextSrcX = ((srcX + 1) % terrainLen + terrainLen) % terrainLen;
       const hPrev = layer.heights[prevSrcX];
       const hNext = layer.heights[nextSrcX];
       const isPeak = h <= hPrev && h <= hNext;

@@ -17,7 +17,7 @@
 
 import { createLightCycle, updateLightCycle, getMood, dateHash } from './lightCycle.js';
 import { generateGlacier, renderGlacierSky, renderGlacierTerrain } from './glacier.js';
-import { createAurora, renderAurora } from './aurora.js';
+import { createAurora, renderAurora, renderLightShafts } from './aurora.js';
 import { createStars, renderStars } from './stars.js';
 import { createRareEvents, registerEvent, updateRareEvents, getEventState, forceEvent } from './rareEvents.js';
 import { initShootingStar, renderShootingStar } from './shootingStar.js';
@@ -40,6 +40,12 @@ let calving = null;
 let snow = null;
 let glitch = null;
 let vignette = null;
+
+// --- Camera drift ---
+// Constant 0.3px/s lateral drift — the glacier extends forever
+const CAMERA_DRIFT_SPEED = 0.3;
+let cameraDriftX = 0;
+let cameraDriftDelta = 0;
 
 // --- Dev panel API (reads/writes internal state) ---
 export const devAPI = {
@@ -141,6 +147,10 @@ export function drawScene(renderer, state) {
   updateLightCycle(lightCycle, cycleDt);
   const mood = getMood(lightCycle);
 
+  // 0. Camera drift — constant lateral movement (respects freeze)
+  cameraDriftDelta = devAPI.frozen ? 0 : state.dt * CAMERA_DRIFT_SPEED;
+  cameraDriftX += cameraDriftDelta;
+
   // 0a. Residue: aurora afterglow + calving fog surge
   // Aurora afterglow: accumulate when aurora is bright for 60+ seconds
   if (mood.auroraVisibility > 0.7) {
@@ -196,7 +206,7 @@ export function drawScene(renderer, state) {
   if (calvingEvent.active && !calvingWasActive && isAudioActive()) triggerCalvingSound();
   if (!calvingEvent.active && calvingWasActive) fogResidueBoost = 0.15; // Calving fog surge
   calvingWasActive = calvingEvent.active;
-  updateCalving(calving, calvingEvent);
+  updateCalving(calving, calvingEvent, cameraDriftX);
 
   // Stillness: the glacier holds its breath. No visual signature.
   const stillnessEvent = getEventState(rareEvents, 'stillness');
@@ -214,22 +224,25 @@ export function drawScene(renderer, state) {
   // 2. Aurora
   renderAurora(aurora, data, width, height, state.time, renderMood);
 
+  // 2b. Aurora light shafts (atmospheric god rays between aurora and glacier)
+  renderLightShafts(aurora, data, width, height, state.time, renderMood);
+
   // 3. Stars + shooting star
   renderStars(stars, data, width, state.time, renderMood);
   renderShootingStar(data, width, height, getEventState(rareEvents, 'shootingStar'));
 
   // 4. Glacier terrain (reads augmented fogDensity + fogColor)
-  renderGlacierTerrain(glacier, data, state.time, renderMood, aurora);
+  renderGlacierTerrain(glacier, data, state.time, renderMood, aurora, cameraDriftX);
 
   // 4b. Ice calving + scars
   applyCalving(calving, data, width, height, calvingEvent);
-  applyScars(calving, data, width, height);
+  applyScars(calving, data, width, height, cameraDriftX);
 
   // 5. Water (with calving ripple boost, aurora light)
   renderWater(data, width, height, state.time, renderMood, calving.rippleBoost, aurora);
 
-  // 6. Snow (whiteout-capable, blue-shifted)
-  updateAndRenderSnow(snow, data, state.time, state.dt, renderMood);
+  // 6. Snow (whiteout-capable, blue-shifted, counter-drift)
+  updateAndRenderSnow(snow, data, state.time, state.dt, renderMood, cameraDriftDelta);
 
   // 7. Glitch + deep glitch inversion
   updateGlitch(glitch, state.dt);
@@ -327,7 +340,7 @@ function seedStartingState(width, height) {
     const jagged = calving.scarJagged[i];
     for (let j = 0; j < blockW; j++) jagged[j] = ((dateHash(50 + i * 16 + j) - 0.5) * 4) | 0;
     const age = 30 + dateHash(base + 4) * 210; // 30-240s ago
-    calving.scars[i] = { blockX, blockY, blockW, blockH, jaggedOffset: jagged, birth: performance.now() - age * 1000 };
+    calving.scars[i] = { blockX, blockY, blockW, blockH, worldX: blockX, jaggedOffset: jagged, birth: performance.now() - age * 1000 };
   }
   calving.scarIdx = scarCount % 4;
 

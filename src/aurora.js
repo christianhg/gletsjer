@@ -192,6 +192,62 @@ export function getAuroraLight(aurora, x) {
   return aurora.columnLight[x];
 }
 
+// --- Light shafts ---
+
+// Vertical zone where shafts render (between aurora bottom and glacier top)
+const SHAFT_TOP_FRAC = 0.40;    // Just below aurora zone
+const SHAFT_BOT_FRAC = 0.70;    // Where glacier body starts
+const SHAFT_MAX_INTENSITY = 12;  // Very subtle — discovered, not noticed
+const SHAFT_COL_THRESHOLD = 0.3; // Minimum columnLight to produce a shaft
+
+/**
+ * Render aurora light shafts — faint god rays between aurora and glacier.
+ * Call AFTER renderAurora, BEFORE stars/glacier terrain.
+ *
+ * @param {Aurora} aurora
+ * @param {Uint8ClampedArray} data
+ * @param {number} width
+ * @param {number} height
+ * @param {number} time
+ * @param {import('./lightCycle.js').Mood} mood
+ */
+export function renderLightShafts(aurora, data, width, height, time, mood) {
+  const vis = mood.auroraVisibility;
+  const effectiveVis = vis * vis * vis; // Cubic — same as aurora
+  if (effectiveVis < 0.01) return;
+
+  const shaftTop = (height * SHAFT_TOP_FRAC) | 0;
+  const shaftBot = (height * SHAFT_BOT_FRAC) | 0;
+  const shaftH = shaftBot - shaftTop;
+  if (shaftH <= 0) return;
+
+  for (let x = 0; x < width; x++) {
+    const colLight = aurora.columnLight[x];
+    if (colLight < SHAFT_COL_THRESHOLD) continue;
+
+    // Noise gate: creates 3-5 visible shafts, slowly drifting
+    const gate = simplex2(x * 0.025 + time * 0.008, time * 0.003);
+    if (gate < -0.2) continue;
+
+    const colR = aurora.columnR[x];
+    const colG = aurora.columnG[x];
+    const colB = aurora.columnB[x];
+    const shaftStr = (colLight - SHAFT_COL_THRESHOLD) * effectiveVis * SHAFT_MAX_INTENSITY;
+
+    for (let y = shaftTop; y < shaftBot; y++) {
+      const vFrac = (y - shaftTop) / shaftH;
+      const fade = (1 - vFrac) * (1 - vFrac); // Quadratic falloff
+      const intensity = shaftStr * fade;
+      if (intensity < 0.5) continue;
+
+      const i = (y * width + x) * 4;
+      data[i]     = clamp255(data[i]     + intensity * colR);
+      data[i + 1] = clamp255(data[i + 1] + intensity * colG);
+      data[i + 2] = clamp255(data[i + 2] + intensity * colB);
+    }
+  }
+}
+
 // --- Util ---
 
 function clamp255(v) {
