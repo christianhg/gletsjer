@@ -47,6 +47,11 @@ const CAMERA_DRIFT_SPEED = 0.3;
 let cameraDriftX = 0;
 let cameraDriftDelta = 0;
 
+// --- Arrival fade-in ---
+// The glacier emerges from darkness over ~6 seconds. Visual only — audio unaffected.
+const ARRIVAL_DURATION = 6.0; // seconds
+let arrivalProgress = 0;
+
 // --- Dev panel API (reads/writes internal state) ---
 export const devAPI = {
   getLightCycle: () => lightCycle,
@@ -150,6 +155,9 @@ export function drawScene(renderer, state) {
   // 0. Camera drift — constant lateral movement (respects freeze)
   cameraDriftDelta = devAPI.frozen ? 0 : state.dt * CAMERA_DRIFT_SPEED;
   cameraDriftX += cameraDriftDelta;
+
+  // 0. Arrival fade-in — glacier emerges from darkness
+  if (arrivalProgress < 1) arrivalProgress = Math.min(1, arrivalProgress + state.dt / ARRIVAL_DURATION);
 
   // 0a. Residue: aurora afterglow + calving fog surge
   // Aurora afterglow: accumulate when aurora is bright for 60+ seconds
@@ -256,6 +264,18 @@ export function drawScene(renderer, state) {
 
   // 8. Vignette
   applyVignette(vignette, data);
+
+  // 8b. Arrival fade-in — darken entire frame (smoothstep ease-out)
+  if (arrivalProgress < 1) {
+    const t = arrivalProgress;
+    const brightness = t * t * (3 - 2 * t); // smoothstep: fast reveal, slow final brightening
+    const len = width * height * 4;
+    for (let i = 0; i < len; i += 4) {
+      data[i]     = (data[i]     * brightness) | 0;
+      data[i + 1] = (data[i + 1] * brightness) | 0;
+      data[i + 2] = (data[i + 2] * brightness) | 0;
+    }
+  }
 
   // 9. Dead pixel — screen damage, over everything including vignette
   const dp = glitch.deadPixel;
