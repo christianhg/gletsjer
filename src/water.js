@@ -213,7 +213,7 @@ export function renderWater(data, width, height, time, mood, rippleBoost, aurora
         const hlStrength = (HIGHLIGHT_ROWS - wy) / HIGHLIGHT_ROWS;
         const surfNoise = simplex2(x * 0.08 + time * 0.12, time * 0.05);
         const surfMod = surfNoise * 0.35 + 0.65;
-        const hl = hlStrength * 28 * mood.ambientBrightness * surfMod;
+        const hl = hlStrength * 28 * Math.max(0.20, mood.ambientBrightness) * surfMod;
         waterR += hl * 0.7;
         waterG += hl + 5;
         waterB += hl + 12;
