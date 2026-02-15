@@ -21,18 +21,3 @@ Sometimes one of those pixels gets stuck. A dead pixel on your screen for thirty
 It doesn't need you to watch. It runs its own time, makes its own weather, and remembers its own history. Close the tab. Come back tomorrow. It will be somewhere else.
 
 [gletsjer.dk](https://gletsjer.dk)
-
-## Development
-
-```bash
-npm install
-npm run dev
-```
-
-## Build
-
-```bash
-npm run build
-```
-
-Output in `dist/`. Deploy anywhere that serves static files.
