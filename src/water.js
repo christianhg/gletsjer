@@ -30,8 +30,7 @@ const RIPPLE_DEPTH_AMP = 0.04;
 /** Reflection power curve exponent — higher = faster fade */
 const REFL_POWER = 1.8;
 
-/** Aurora attenuation on water vs ice (water absorbs more) */
-const AURORA_WATER_ATTEN = 0.35;
+/** Aurora rows affected on water surface */
 const AURORA_WATER_ROWS = 8;
 
 /** Surface highlight */
@@ -119,7 +118,7 @@ export function renderWater(data, width, height, time, mood, rippleBoost, aurora
     // Aurora light for this column (attenuated for water)
     let auroraLight = 0, auroraR = 0, auroraG = 0, auroraB = 0;
     if (aurora && aurora.columnLight[x] > 0.005) {
-      auroraLight = aurora.columnLight[x] * AURORA_WATER_ATTEN;
+      auroraLight = aurora.columnLight[x];
       auroraR = aurora.columnR[x];
       auroraG = aurora.columnG[x];
       auroraB = aurora.columnB[x];
