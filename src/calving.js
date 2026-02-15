@@ -28,17 +28,35 @@
  *   GAP_DARKEN           0.4      Exposed interior darkening factor
  */
 
+import { dateHash } from './lightCycle.js';
+
 // --- Constants ---
 
-/** Regular block dimensions (pixels) */
+/** Regular block dimensions — standard variant (pixels) */
 const BLOCK_W_MIN = 8;
 const BLOCK_W_MAX = 16;
 const BLOCK_H_MIN = 6;
 const BLOCK_H_MAX = 12;
 
-/** Regular fall distance range (pixels) */
+/** Regular fall distance range — standard variant (pixels) */
 const FALL_DIST_MIN = 10;
 const FALL_DIST_MAX = 18;
+
+/** Calving variant dimensions — daily personality */
+// Shear: wide horizontal fracture
+const SHEAR_W_MIN = 12, SHEAR_W_MAX = 24;
+const SHEAR_H_MIN = 4,  SHEAR_H_MAX = 8;
+const SHEAR_FALL_MIN = 8, SHEAR_FALL_MAX = 14;
+// Crumble: narrow vertical column
+const CRUMBLE_W_MIN = 6,  CRUMBLE_W_MAX = 12;
+const CRUMBLE_H_MIN = 8,  CRUMBLE_H_MAX = 16;
+const CRUMBLE_FALL_MIN = 12, CRUMBLE_FALL_MAX = 22;
+
+// Daily variant weights — normalized to cumulative thresholds
+const _vw0 = dateHash(112), _vw1 = dateHash(113), _vw2 = dateHash(114);
+const _vwSum = _vw0 + _vw1 + _vw2;
+const VARIANT_STANDARD_THRESHOLD = _vw0 / _vwSum;
+const VARIANT_SHEAR_THRESHOLD = (_vw0 + _vw1) / _vwSum;
 
 /** Phase boundaries (fraction of total progress 0→1) */
 const CRACK_END = 0.15;
@@ -436,13 +454,30 @@ function pickRegularBlock(calving) {
   block.phase = 'crack';
   block.isMain = false;
 
-  block.blockW = BLOCK_W_MIN + ((Math.random() * (BLOCK_W_MAX - BLOCK_W_MIN)) | 0);
-  block.blockH = BLOCK_H_MIN + ((Math.random() * (BLOCK_H_MAX - BLOCK_H_MIN)) | 0);
+  // Daily calving variant: standard, shear, or crumble
+  const roll = Math.random();
+  let wMin, wMax, hMin, hMax, fMin, fMax;
+  if (roll < VARIANT_STANDARD_THRESHOLD) {
+    wMin = BLOCK_W_MIN; wMax = BLOCK_W_MAX;
+    hMin = BLOCK_H_MIN; hMax = BLOCK_H_MAX;
+    fMin = FALL_DIST_MIN; fMax = FALL_DIST_MAX;
+  } else if (roll < VARIANT_SHEAR_THRESHOLD) {
+    wMin = SHEAR_W_MIN; wMax = SHEAR_W_MAX;
+    hMin = SHEAR_H_MIN; hMax = SHEAR_H_MAX;
+    fMin = SHEAR_FALL_MIN; fMax = SHEAR_FALL_MAX;
+  } else {
+    wMin = CRUMBLE_W_MIN; wMax = CRUMBLE_W_MAX;
+    hMin = CRUMBLE_H_MIN; hMax = CRUMBLE_H_MAX;
+    fMin = CRUMBLE_FALL_MIN; fMax = CRUMBLE_FALL_MAX;
+  }
+
+  block.blockW = wMin + ((Math.random() * (wMax - wMin)) | 0);
+  block.blockH = hMin + ((Math.random() * (hMax - hMin)) | 0);
 
   const margin = (width * 0.2) | 0;
   block.blockX = margin + ((Math.random() * (width - 2 * margin - block.blockW)) | 0);
   block.blockY = ((height * CALVE_ZONE_Y_FRAC) | 0) + ((Math.random() * CALVE_ZONE_RANGE) | 0);
-  block.fallDist = FALL_DIST_MIN + ((Math.random() * (FALL_DIST_MAX - FALL_DIST_MIN)) | 0);
+  block.fallDist = fMin + ((Math.random() * (fMax - fMin)) | 0);
 
   // Jagged top edge
   for (let dx = 0; dx < block.blockW; dx++) {

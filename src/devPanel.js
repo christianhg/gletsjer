@@ -9,7 +9,7 @@
  */
 
 import { devAPI } from './scene.js';
-import { toggleAudio, isAudioActive } from './audio.js';
+import { toggleAudio, isAudioActive, forceCreak, getCreakInterval } from './audio.js';
 
 // --- Konami code detection (event.code, not deprecated keyCode) ---
 const KONAMI = [
@@ -98,9 +98,16 @@ function buildPanel() {
 <div style="margin-bottom:8px">
 <div style="color:#888;margin-bottom:3px">Events</div>
 <div style="display:flex;flex-wrap:wrap;gap:3px">
-${['calving','shootingStar','whiteout','deepGlitch','stillness'].map(id =>
+${['calving','epicCalving','shootingStar','whiteout','deepGlitch','stillness'].map(id =>
   `<button data-evt="${id}" style="all:unset;cursor:pointer;padding:2px 6px;background:#222;color:#999;border:1px solid #444;border-radius:2px;font:inherit">${id.replace(/([A-Z])/g,' $1').trim()}</button>`
 ).join('')}
+</div>
+</div>
+
+<div style="margin-bottom:8px">
+<div style="display:flex;align-items:center;gap:6px">
+<button id="dp-creak" style="all:unset;cursor:pointer;padding:2px 6px;background:#222;color:#999;border:1px solid #444;border-radius:2px;font:inherit">Force creak</button>
+<span style="color:#666">interval: <span id="dp-creak-val">—</span>s</span>
 </div>
 </div>
 
@@ -145,6 +152,8 @@ ${driftSlider('brightMod', -0.15, 0.15, 0.005)}
   els.freeze = panel.querySelector('#dp-freeze');
   els.resetDrift = panel.querySelector('#dp-reset-drift');
   els.audio = panel.querySelector('#dp-audio');
+  els.creak = panel.querySelector('#dp-creak');
+  els.creakVal = panel.querySelector('#dp-creak-val');
 
   for (const key of Object.keys(driftDragging)) {
     els[key] = panel.querySelector(`#dp-${key}`);
@@ -195,6 +204,9 @@ ${driftSlider('brightMod', -0.15, 0.15, 0.005)}
       cycle[key] = 0;
     }
   });
+
+  // Force creak
+  els.creak.addEventListener('click', () => forceCreak());
 
   // Audio toggle
   els.audio.addEventListener('click', () => toggleAudio(false));
@@ -250,6 +262,8 @@ function syncReadouts() {
     els[key + 'Val'].textContent = cycle[key].toFixed(3);
   }
 
-  // Audio state
+  // Audio state + creak interval
   els.audio.textContent = 'Audio: ' + (isAudioActive() ? 'on' : 'off');
+  const ci = getCreakInterval();
+  els.creakVal.textContent = ci > 0 ? ci.toFixed(1) : '—';
 }

@@ -6,6 +6,8 @@
  * All parameters derived from mood. Touch to activate, touch to mute.
  */
 
+import { dateHash } from './lightCycle.js';
+
 let ctx, master, masterLpf, initialized = false, muted = false, reduced = false;
 let droneA, droneB, droneLpf, droneMix;
 let iceFilter, windFilter, windGain, windLfoGain;
@@ -13,6 +15,14 @@ let auroraOsc, auroraGain;
 let eventBus, noiseBuf;
 let whiteoutActive = false;
 let audioElapsed = 0;
+
+// --- Ice creak: ambient stress sounds ---
+// Poisson-timed pops, cracks, and groans. Through master, not eventBus.
+// Daily personality: mean interval 8-25s, type bias from dateHash.
+let creakTimer = 0;
+let creakMeanInterval = 15;  // overwritten at init from dateHash(101)
+let creakTypeBias = 0.5;     // overwritten at init from dateHash(102)
+let creakInitialized = false;
 
 // Thermal inertia — lagged phases for stratigraphy
 // Ice is slow (τ=18s), air is medium (τ=6s), light is fast (τ=3s)
@@ -84,6 +94,7 @@ export function endStillness() {
 export function updateAudio(mood, dt, fogFrontX) {
   if (!isAudioActive()) return;
   audioElapsed += dt;
+  updateIceCreak(dt);
   const t = ctx.currentTime, τ = 3.0;
 
   // Thermal inertia: lag each layer's phase at different rates
@@ -124,6 +135,83 @@ function lagPhase(current, target, dt, τ) {
   if (delta > 0.5) delta -= 1;
   if (delta < -0.5) delta += 1;
   return ((current + delta * (dt / τ)) % 1 + 1) % 1;
+}
+
+// --- Ice creak: ambient stress sounds ---
+
+/** Initialize creak personality from daily seed. Called once on first updateIceCreak. */
+function initCreak() {
+  creakMeanInterval = 8 + dateHash(101) * 17;  // 8-25s mean
+  creakTypeBias = dateHash(102);                // 0-1: low = more pops, high = more groans
+  creakTimer = creakMeanInterval * 0.5;         // First creak at ~half interval
+  creakInitialized = true;
+}
+
+/**
+ * Update ice creak timer. Called from updateAudio every frame.
+ * Poisson process: -meanInterval * ln(random) gives exponential inter-arrival.
+ */
+export function updateIceCreak(dt) {
+  if (!isAudioActive()) return;
+  if (!creakInitialized) initCreak();
+  creakTimer -= dt;
+  if (creakTimer > 0) return;
+
+  // Schedule next creak (Poisson inter-arrival)
+  creakTimer = -creakMeanInterval * Math.log(Math.random() || 0.001);
+
+  // Pick type: pop (short click), crack (medium snap), groan (low stress)
+  // Bias shifts distribution: low bias = more pops, high = more groans
+  const roll = Math.random();
+  const popThreshold = 0.5 - creakTypeBias * 0.3;     // 0.20-0.50
+  const crackThreshold = popThreshold + 0.35;           // 0.55-0.85
+
+  const t = ctx.currentTime;
+  const v = reduced ? 0.015 : 0.03;  // Quiet — ambient, not event
+
+  if (roll < popThreshold) {
+    // Pop: short click, 800-1200Hz sine, 0.08s
+    const freq = 800 + Math.random() * 400;
+    const o = osc('sine', freq);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.5, t + 0.04);
+    const g = gain(v * (0.5 + Math.random() * 0.5));
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + 0.08);
+  } else if (roll < crackThreshold) {
+    // Crack: medium snap, 400-700Hz triangle, 0.15-0.25s
+    const freq = 400 + Math.random() * 300;
+    const dur = 0.15 + Math.random() * 0.1;
+    const o = osc('triangle', freq);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.4, t + dur);
+    const g = gain(v * 0.8);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur);
+  } else {
+    // Groan: deep structural stress, 180-280Hz sine, 0.4-0.8s
+    const freq = 180 + Math.random() * 100;
+    const dur = 0.4 + Math.random() * 0.4;
+    const o = osc('sine', freq);
+    o.frequency.exponentialRampToValueAtTime(freq * (0.85 + Math.random() * 0.1), t + dur);
+    const g = gain(v);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(v, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur);
+  }
+}
+
+/** Force a creak sound immediately (dev panel). */
+export function forceCreak() {
+  if (!isAudioActive()) return;
+  creakTimer = 0.01;  // Fires on next updateIceCreak call
+}
+
+/** Get current creak mean interval for dev panel display. */
+export function getCreakInterval() {
+  return creakInitialized ? creakMeanInterval : 0;
 }
 
 // --- Event sounds ---
