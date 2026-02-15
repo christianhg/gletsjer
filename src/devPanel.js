@@ -135,6 +135,10 @@ ${driftSlider('brightMod', -0.15, 0.15, 0.005)}
 <button id="dp-reset-drift" style="all:unset;cursor:pointer;padding:2px 6px;background:#222;color:#999;border:1px solid #444;border-radius:2px;font:inherit;margin-top:4px">Reset drift</button>
 </div>
 
+<div style="margin-bottom:8px">
+<label style="cursor:pointer"><input id="dp-dither" type="checkbox"> <span style="color:#888">Ordered dithering</span></label>
+</div>
+
 <div>
 <button id="dp-audio" style="all:unset;cursor:pointer;padding:2px 6px;background:#222;color:#999;border:1px solid #444;border-radius:2px;font:inherit">Audio: off</button>
 </div>
@@ -154,6 +158,7 @@ ${driftSlider('brightMod', -0.15, 0.15, 0.005)}
   els.audio = panel.querySelector('#dp-audio');
   els.creak = panel.querySelector('#dp-creak');
   els.creakVal = panel.querySelector('#dp-creak-val');
+  els.dither = panel.querySelector('#dp-dither');
 
   for (const key of Object.keys(driftDragging)) {
     els[key] = panel.querySelector(`#dp-${key}`);
@@ -207,6 +212,9 @@ ${driftSlider('brightMod', -0.15, 0.15, 0.005)}
 
   // Force creak
   els.creak.addEventListener('click', () => forceCreak());
+
+  // Dithering toggle
+  els.dither.addEventListener('change', () => devAPI.toggleDithering());
 
   // Audio toggle
   els.audio.addEventListener('click', () => toggleAudio(false));
@@ -266,4 +274,7 @@ function syncReadouts() {
   els.audio.textContent = 'Audio: ' + (isAudioActive() ? 'on' : 'off');
   const ci = getCreakInterval();
   els.creakVal.textContent = ci > 0 ? ci.toFixed(1) : '—';
+
+  // Dithering state
+  els.dither.checked = devAPI.isDitheringEnabled();
 }

@@ -5,16 +5,21 @@
  *   - Terrain profiles are pre-computed once as height arrays (generateGlacier)
  *   - Heightmaps are 3× display width (960px) for camera drift headroom
  *   - 32px smoothstep crossfade at wrap point for seamless tiling
+ *   - Surface normals pre-computed at init (finite differences → Lambertian lighting)
  *   - Each frame, layers render back-to-front with animated effects
- *   - Colors are mood-dependent: lightCycle.js provides tints, fog, aurora light
+ *   - Colors: 70% static palette + 30% daily cosine palette (dateHash 120-131)
+ *   - Normal-mapped directional lighting: phase-driven light direction, depth fade
+ *   - Geological strata: domain-warped horizontal bands, light-coupled visibility
  *   - Crevasses use ridge noise, pre-computed per layer
  *   - Shimmer uses 3D noise (time as Z) for organic sparkle
  *   - All frequencies are incommensurate — nothing syncs up
  *   - Far layers (fogBase > 0.30) get 1px horizontal DoF blur after rendering
+ *   - Optional ordered dithering (4×4 Bayer, dev panel toggle)
  */
 
 import { fbm, ridge, simplex2, simplex3 } from './noise.js';
 import * as palette from './palette.js';
+import { dateHash } from './lightCycle.js';
 
 // --- Layer definitions (back to front) ---
 
@@ -138,9 +143,98 @@ const BLEND_ZONE = 32;
 /** DoF blur threshold — layers with fogBase above this get blurred */
 const DOF_FOG_THRESHOLD = 0.30;
 
+// --- Cosine palette: daily structural color variation ---
+// color(t) = a + b * cos(2π(c*t + d))
+// a,b,c,d are RGB vectors seeded daily. t = columnDepth (0=surface, 1=deep).
+// Constrained to glacial blue-purple-cyan range — never warm.
+
+const COS_A = new Float32Array(3); // bias (center)
+const COS_B = new Float32Array(3); // amplitude
+const COS_C = new Float32Array(3); // frequency
+const COS_D = new Float32Array(3); // phase offset
+
+function initCosinePalette() {
+  // Base: glacial blue-white center, moderate amplitude
+  // dateHash modulates within a constrained range — always reads as ice
+  const h = (i) => dateHash(120 + i); // indices 120-131
+
+  // Center: cool tones (high blue, moderate green, low red)
+  COS_A[0] = 0.35 + h(0) * 0.15;  // R: 0.35-0.50
+  COS_A[1] = 0.45 + h(1) * 0.15;  // G: 0.45-0.60
+  COS_A[2] = 0.55 + h(2) * 0.15;  // B: 0.55-0.70
+
+  // Amplitude: how much the color swings
+  COS_B[0] = 0.15 + h(3) * 0.15;  // R: 0.15-0.30
+  COS_B[1] = 0.15 + h(4) * 0.15;  // G: 0.15-0.30
+  COS_B[2] = 0.10 + h(5) * 0.15;  // B: 0.10-0.25 (less swing — blue stays dominant)
+
+  // Frequency: how many color cycles across depth
+  COS_C[0] = 0.5 + h(6) * 1.0;    // R: 0.5-1.5
+  COS_C[1] = 0.5 + h(7) * 1.0;    // G: 0.5-1.5
+  COS_C[2] = 0.5 + h(8) * 0.8;    // B: 0.5-1.3
+
+  // Phase offset: where in the cosine cycle each channel starts
+  COS_D[0] = h(9);                 // R: 0.0-1.0
+  COS_D[1] = h(10);                // G: 0.0-1.0
+  COS_D[2] = h(11);                // B: 0.0-1.0
+}
+
+// Pre-computed cosine palette LUT: 64 entries × 3 channels = 192 floats
+// Rebuilt once per frame with current ambient. Avoids Math.cos in inner loop.
+const COS_LUT_SIZE = 64;
+const COS_LUT = new Float32Array(COS_LUT_SIZE * 3);
+let _cosLutAmbient = -1; // Sentinel: force rebuild on first frame
+
+/**
+ * Rebuild cosine palette LUT for current ambient brightness.
+ * Called once per frame before rendering layers. ~192 cos calls total.
+ */
+function rebuildCosineLUT(ambient) {
+  if (ambient === _cosLutAmbient) return; // Skip if ambient unchanged
+  _cosLutAmbient = ambient;
+  const TAU = Math.PI * 2;
+  for (let i = 0; i < COS_LUT_SIZE; i++) {
+    const t = i / (COS_LUT_SIZE - 1);
+    const base = i * 3;
+    COS_LUT[base]     = (COS_A[0] + COS_B[0] * Math.cos(TAU * (COS_C[0] * t + COS_D[0]))) * 255 * ambient;
+    COS_LUT[base + 1] = (COS_A[1] + COS_B[1] * Math.cos(TAU * (COS_C[1] * t + COS_D[1]))) * 255 * ambient;
+    COS_LUT[base + 2] = (COS_A[2] + COS_B[2] * Math.cos(TAU * (COS_C[2] * t + COS_D[2]))) * 255 * ambient;
+  }
+}
+
+/**
+ * Look up cosine palette at depth t (0=surface, 1=deep).
+ * Uses pre-computed LUT with linear interpolation. Zero trig in inner loop.
+ * @param {number} t — column depth 0→1
+ * @param {number[]} out — [r,g,b] output (mutated)
+ */
+function cosinePaletteLookup(t, out) {
+  const ft = t * (COS_LUT_SIZE - 1);
+  const idx = ft | 0;
+  const frac = ft - idx;
+  const lo = idx * 3;
+  const hi = Math.min(idx + 1, COS_LUT_SIZE - 1) * 3;
+  out[0] = COS_LUT[lo]     + (COS_LUT[hi]     - COS_LUT[lo])     * frac;
+  out[1] = COS_LUT[lo + 1] + (COS_LUT[hi + 1] - COS_LUT[lo + 1]) * frac;
+  out[2] = COS_LUT[lo + 2] + (COS_LUT[hi + 2] - COS_LUT[lo + 2]) * frac;
+}
+
+// Pre-allocated output for cosinePaletteLookup (zero GC)
+const _cosOut = [0, 0, 0];
+
+// --- Ordered dithering: 4×4 Bayer matrix ---
+// Normalized to [-0.5, 0.5] range for threshold dithering
+const BAYER_4X4 = new Float32Array([
+   0/16 - 0.5,  8/16 - 0.5,  2/16 - 0.5, 10/16 - 0.5,
+  12/16 - 0.5,  4/16 - 0.5, 14/16 - 0.5,  6/16 - 0.5,
+   3/16 - 0.5, 11/16 - 0.5,  1/16 - 0.5,  9/16 - 0.5,
+  15/16 - 0.5,  7/16 - 0.5, 13/16 - 0.5,  5/16 - 0.5,
+]);
+
 /**
  * @typedef {Object} GlacierLayer
  * @property {Float32Array} heights
+ * @property {Float32Array} normals — surface normal [nx, ny] pairs, 2 floats per column
  * @property {Float32Array} crevasses
  * @property {number[]} colorDark
  * @property {number[]} colorLight
@@ -168,8 +262,12 @@ const DOF_FOG_THRESHOLD = 0.30;
 export function generateGlacier(width, height) {
   const terrainWidth = width * TERRAIN_WIDTH_MULT;
 
+  // Init daily cosine palette
+  initCosinePalette();
+
   const layers = LAYER_DEFS.map((def, li) => {
     const heights = new Float32Array(terrainWidth);
+    const normals = new Float32Array(terrainWidth * 2); // [nx, ny] pairs
     const crevasses = new Float32Array(terrainWidth);
 
     for (let x = 0; x < terrainWidth; x++) {
@@ -194,8 +292,23 @@ export function generateGlacier(width, height) {
       crevasses[wrapX] = crevasses[wrapX] * (1 - smooth) + crevasses[i] * smooth;
     }
 
+    // Compute surface normals from height derivatives (finite differences)
+    // Tangent = (2, dh), Normal = perpendicular, normalized to unit length.
+    // Computed once at init — zero per-frame cost.
+    for (let x = 0; x < terrainWidth; x++) {
+      const xPrev = (x - 1 + terrainWidth) % terrainWidth;
+      const xNext = (x + 1) % terrainWidth;
+      const dh = heights[xNext] - heights[xPrev]; // height delta over 2px
+      const dx = 2.0; // horizontal span
+      // Tangent: (dx, dh). Normal: perpendicular = (-dh, dx), normalized.
+      const len = Math.sqrt(dx * dx + dh * dh);
+      normals[x * 2]     = -dh / len; // nx: points away from surface
+      normals[x * 2 + 1] = dx / len;  // ny: upward component
+    }
+
     return {
       heights,
+      normals,
       crevasses,
       colorDark: def.colorDark,
       colorLight: def.colorLight,
@@ -231,8 +344,19 @@ export function renderGlacierSky(glacier, data, time, mood) {
  * @param {import('./aurora.js').Aurora} aurora
  * @param {number} cameraDriftX — global camera drift offset (pixels)
  */
+// --- Dithering state (toggled via dev panel) ---
+let _ditheringEnabled = false; // Off by default — dev panel toggle for christian to evaluate
+
+/** Toggle ordered dithering on/off. Returns new state. */
+export function toggleDithering() { _ditheringEnabled = !_ditheringEnabled; return _ditheringEnabled; }
+/** Get current dithering state. */
+export function isDitheringEnabled() { return _ditheringEnabled; }
+
 export function renderGlacierTerrain(glacier, data, time, mood, aurora, cameraDriftX) {
   const { layers, width, height } = glacier;
+
+  // Rebuild cosine palette LUT for current ambient (once per frame, ~192 cos calls)
+  rebuildCosineLUT(mood.ambientBrightness);
 
   for (let li = 0; li < layers.length; li++) {
     renderLayer(layers[li], data, width, height, time, li, mood, aurora, cameraDriftX);
@@ -241,6 +365,13 @@ export function renderGlacierTerrain(glacier, data, time, mood, aurora, cameraDr
     if (layers[li].fogBase > DOF_FOG_THRESHOLD) {
       blurLayer(layers[li], data, width, height, time, cameraDriftX);
     }
+  }
+
+  // Ordered dithering: selective 4×4 Bayer on terrain pixels
+  // Applied after all layers render, before snow caps
+  // Only dithers mid-tone pixels (avoids dithering pure black/white)
+  if (_ditheringEnabled) {
+    applyDithering(layers, data, width, height, time, cameraDriftX);
   }
 
   renderSnowCaps(layers, data, width, height, time, mood, cameraDriftX);
@@ -278,7 +409,7 @@ function renderSky(data, width, height, time, mood) {
 // --- Layer rendering ---
 
 function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora, cameraDriftX) {
-  const { heights, crevasses, colorDark, colorLight, depth, driftSpeed, shimmerAmount, fogBase } = layer;
+  const { heights, normals, crevasses, colorDark, colorLight, depth, driftSpeed, shimmerAmount, fogBase } = layer;
   const terrainLen = heights.length;
 
   // Mood tints
@@ -303,6 +434,33 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora,
 
   // Shimmer modulation: ambient light cycle + aurora memory
   const shimmerMod = (0.2 + ambient * 0.8) * (mood.shimmerBoost || 1.0);
+
+  // Normal-mapped lighting: light direction from mood phase
+  // Phase 0.0-0.2 (cold→amber): light from right (low sun east)
+  // Phase 0.2-0.4 (amber→violet): light from above
+  // Phase 0.4-0.8 (night): diffuse (no directional component)
+  // Phase 0.8-1.0 (dawn): light from left (low sun west)
+  const phase = mood.phase;
+  let lightDirX, lightDirY;
+  if (phase < 0.15) {
+    lightDirX = 0.3; lightDirY = 0.7;        // Morning: from right, mostly above
+  } else if (phase < 0.35) {
+    const t = (phase - 0.15) / 0.20;
+    lightDirX = 0.3 * (1 - t);               // Fade horizontal to zero
+    lightDirY = 0.7 + 0.3 * t;               // Fade to overhead
+  } else if (phase < 0.70) {
+    lightDirX = 0.0; lightDirY = 1.0;        // Night: straight above (diffuse)
+  } else if (phase < 0.85) {
+    const t = (phase - 0.70) / 0.15;
+    lightDirX = -0.3 * t;                     // Dawn: from left
+    lightDirY = 1.0 - 0.3 * t;               // Slightly lower
+  } else {
+    const t = (phase - 0.85) / 0.15;
+    lightDirX = -0.3 * (1 - t);              // Fade back to neutral
+    lightDirY = 0.7 + 0.3 * t;               // Back to overhead
+  }
+  // Normal lighting strength: stronger in bright conditions, absent at night
+  const normalStrength = ambient > 0.6 ? (ambient - 0.6) * 2.5 : 0; // 0→1 for ambient 0.6→1.0
 
   // Animated drift offset — layer's own drift + camera drift (depth-scaled)
   const drift = time * driftSpeed;
@@ -333,6 +491,15 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora,
     const columnHeight = height - terrainY;
     const crevasseBase = crevasses[srcX];
 
+    // Normal-mapped directional light for this column
+    // Lambertian: dot(normal, lightDir) → 0 = shadowed, 1 = fully lit
+    const nx = normals[srcX * 2];
+    const ny = normals[srcX * 2 + 1];
+    const ndotl = Math.max(0, nx * lightDirX + ny * lightDirY);
+    // Blend: 40% ambient + 60% directional, scaled by normalStrength
+    // When normalStrength=0 (night), this is just 1.0 (no effect)
+    const normalMul = 1.0 + (0.4 + 0.6 * ndotl - 1.0) * normalStrength;
+
     // Aurora light for this column (0 when aurora not visible)
     let auroraIntensity = 0;
     let auroraR = 0, auroraG = 0, auroraB = 0;
@@ -348,16 +515,48 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora,
       const pixelsFromSurface = y - terrainY;
       const columnDepth = pixelsFromSurface / columnHeight;
 
-      // --- Base color with mood tint ---
-      // Deep pixels get shadow tint, surface pixels get highlight tint
+      // --- Base color: cosine palette blended with static palette ---
+      // Cosine palette provides daily structural variation
+      // Static palette provides the familiar glacial character
+      // Blend: 30% cosine, 70% static — cosine adds color, doesn't replace it
+      cosinePaletteLookup(columnDepth, _cosOut);
+
       const tintBlend = columnDepth; // 0 = surface (highlight), 1 = deep (shadow)
       const tintR = hlR + (shadowR - hlR) * tintBlend;
       const tintG = hlG + (shadowG - hlG) * tintBlend;
       const tintB = hlB + (shadowB - hlB) * tintBlend;
 
-      let baseR = (colorLight[0] + (colorDark[0] - colorLight[0]) * columnDepth) * ambient + tintR;
-      let baseG = (colorLight[1] + (colorDark[1] - colorLight[1]) * columnDepth) * ambient + tintG;
-      let baseB = (colorLight[2] + (colorDark[2] - colorLight[2]) * columnDepth) * ambient + tintB;
+      const staticR = (colorLight[0] + (colorDark[0] - colorLight[0]) * columnDepth) * ambient;
+      const staticG = (colorLight[1] + (colorDark[1] - colorLight[1]) * columnDepth) * ambient;
+      const staticB = (colorLight[2] + (colorDark[2] - colorLight[2]) * columnDepth) * ambient;
+
+      let baseR = staticR * 0.7 + _cosOut[0] * 0.3 + tintR;
+      let baseG = staticG * 0.7 + _cosOut[1] * 0.3 + tintG;
+      let baseB = staticB * 0.7 + _cosOut[2] * 0.3 + tintB;
+
+      // --- Normal-mapped lighting ---
+      // Multiplicative: lit faces brighten, shadowed faces darken
+      // Fades with depth into the ice (surface catches light, deep ice is diffuse)
+      const normalFade = 1.0 - columnDepth * 0.7; // Surface=1.0, deep=0.3
+      const nMul = 1.0 + (normalMul - 1.0) * normalFade;
+      baseR *= nMul;
+      baseG *= nMul;
+      baseB *= nMul;
+
+      // --- Geological strata ---
+      // Domain-warped horizontal bands — visible but messy, light-dependent
+      // "Can the viewer point at a band and say 'that's a layer'?
+      //  If yes on first glance, too legible. If yes after 10 minutes, that's the target."
+      const strataWarp = simplex2(
+        x * 0.015 + layerIndex * 37 + texDriftX * 0.2,
+        columnDepth * 3.0 + layerIndex * 11
+      ) * 0.15; // Domain warp amount
+      const strataY = columnDepth * 8.0 + strataWarp * 8.0; // 8 potential bands across depth
+      const strataRaw = Math.sin(strataY * Math.PI * 2);
+      // Light-coupled: strata only visible on lit faces (ndotl > 0.3)
+      // Vanish in shadow, emerge in directional light — discovered, not noticed
+      const strataVis = ndotl > 0.3 ? (ndotl - 0.3) * 1.4 * normalStrength : 0;
+      const strata = strataRaw * 5 * strataVis * (0.3 + columnDepth * 0.7); // Stronger deeper
 
       // --- Ice texture ---
       const tex = simplex2(
@@ -424,9 +623,9 @@ function renderLayer(layer, data, width, height, time, layerIndex, mood, aurora,
       }
 
       // --- Compose ---
-      let finalR = baseR + tex + stria + highlight - crevasseDarken + cyanR + shimmer + cycleDrift * 0.3 + auroraLightR;
-      let finalG = baseG + tex + stria + highlight - crevasseDarken + cyanG + shimmer + cycleDrift * 0.6 + auroraLightG;
-      let finalB = baseB + tex * 0.7 + stria + highlight - crevasseDarken * 0.6 + cyanB + shimmer + cycleDrift + auroraLightB;
+      let finalR = baseR + tex + stria + strata + highlight - crevasseDarken + cyanR + shimmer + cycleDrift * 0.3 + auroraLightR;
+      let finalG = baseG + tex + stria + strata + highlight - crevasseDarken + cyanG + shimmer + cycleDrift * 0.6 + auroraLightG;
+      let finalB = baseB + tex * 0.7 + stria + strata + highlight - crevasseDarken * 0.6 + cyanB + shimmer + cycleDrift + auroraLightB;
 
       // --- Fog: blend toward fog color based on layer depth ---
       if (fogAmount > 0) {
@@ -494,6 +693,65 @@ function blurLayer(layer, data, width, height, time, cameraDriftX) {
       data[si]     = (blurBuf[bi - 3] + (blurBuf[bi]     << 1) + blurBuf[bi + 3]) >> 2;
       data[si + 1] = (blurBuf[bi - 2] + (blurBuf[bi + 1] << 1) + blurBuf[bi + 4]) >> 2;
       data[si + 2] = (blurBuf[bi - 1] + (blurBuf[bi + 2] << 1) + blurBuf[bi + 5]) >> 2;
+    }
+  }
+}
+
+// --- Ordered dithering ---
+
+/**
+ * Apply 4×4 ordered dithering to terrain pixels.
+ * Selective: only affects mid-tone pixels (20-235 range) to avoid
+ * dithering pure shadows or highlights. Strength is subtle — adds
+ * texture without looking like a filter.
+ *
+ * @param {GlacierLayer[]} layers
+ * @param {Uint8ClampedArray} data
+ * @param {number} width
+ * @param {number} height
+ * @param {number} time
+ * @param {number} cameraDriftX
+ */
+function applyDithering(layers, data, width, height, time, cameraDriftX) {
+  // Find the topmost terrain pixel per column (highest layer that has terrain)
+  // We only dither terrain pixels, not sky
+  const lastLayer = layers[layers.length - 1];
+  const terrainLen = lastLayer.heights.length;
+  const drift = time * lastLayer.driftSpeed;
+  const cameraPx = (cameraDriftX * (0.1 + lastLayer.depth * 0.9)) | 0;
+
+  // Dither strength: subtle — ±3 levels out of 255
+  const DITHER_STRENGTH = 3.0;
+
+  // Simple approach: dither everything below the first layer's terrain line
+  // (sky is above all terrain, so we find the global minimum terrainY)
+  const firstLayer = layers[0];
+  const firstLen = firstLayer.heights.length;
+  const firstDrift = time * firstLayer.driftSpeed;
+  const firstCameraPx = (cameraDriftX * (0.1 + firstLayer.depth * 0.9)) | 0;
+  const firstOffset = ((firstDrift * 8 + firstCameraPx) | 0);
+
+  let globalMinY = height;
+  for (let x = 0; x < width; x++) {
+    const srcX = ((x + firstOffset) % firstLen + firstLen) % firstLen;
+    const ty = (firstLayer.heights[srcX] * height) | 0;
+    if (ty < globalMinY) globalMinY = ty;
+  }
+
+  for (let y = globalMinY; y < height; y++) {
+    const bayerRow = (y & 3) << 2; // (y % 4) * 4
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+
+      // Skip near-black and near-white pixels
+      const luma = (r * 77 + g * 150 + b * 29) >> 8; // Fast approximate luminance
+      if (luma < 20 || luma > 235) continue;
+
+      const threshold = BAYER_4X4[bayerRow + (x & 3)] * DITHER_STRENGTH;
+      data[i]     = clamp(r + threshold);
+      data[i + 1] = clamp(g + threshold);
+      data[i + 2] = clamp(b + threshold);
     }
   }
 }
